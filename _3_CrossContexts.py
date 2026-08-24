@@ -5,10 +5,10 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
-from sklearn.linear_model import LinearRegression
 from scipy.stats import norm
 import copy
 import importlib
+import os
 from utils import plot_stimulus 
 from utils import plot_neuralstate_cd
 from utils import plot_neuralstate_eucldist
@@ -59,7 +59,7 @@ CD_dotproduct  = np.zeros(nfile)
 # Load the fitted model #
 #########################
 datapath = 'data/fit_neuron_activity/'
-modelfit = np.load(datapath + 'dict_peaktime.npy', allow_pickle=True).item()
+modelfit = np.load(datapath + 'modelfit.npy', allow_pickle=True).item()
 
 
 # %%
@@ -177,10 +177,6 @@ for ci in range(4):
     # plt.axvline(modelfit[f'sess{fx}']['P1']['par'][cell_matched[ci],2],linestyle='--', color='C2')
 plt.tight_layout()
 
-#%%
-plt.figure()
-plt.plot(_amp_frac,_var_frac)
-
 
 #%%
 for fx in range(nfile):
@@ -213,21 +209,21 @@ for fx in range(nfile):
     keep      = keep_set1 * keep_set2
     num_outliers[fx] = np.sum(~keep)
     
-    ###################################################################
-    # keep only the high amplitude cells that explain 90% of variance #
-    ################################################################### 
-    keep_idx = np.where(keep)[0]
-    _idx_accu = np.array([])
-    idx_amp = 1
-    for act in ['P1','A1','P2','A2']:
-        _amp_neuron =        modelfit[f'sess{fx}'][act]['par'][:,idx_amp][keep_idx]
-        _var_neuron = np.var(modelfit[f'sess{fx}'][act]['data'],axis=1)[keep_idx]    
-        _amp_frac, _var_frac, _idx_topamp = functions.find_top_90_cells(_amp_neuron,_var_neuron,percentage=0.9)
-        _idx_accu = np.concatenate((_idx_accu,_idx_topamp))
-    _idx_topamp = np.unique(_idx_accu).astype(int)
-    keep_idx_topamp = keep_idx[_idx_topamp]
-    keep = np.zeros_like(keep,dtype=bool)
-    keep[keep_idx_topamp] = True
+    # ###################################################################
+    # # keep only the high amplitude cells that explain 90% of variance #
+    # ################################################################### 
+    # keep_idx = np.where(keep)[0]
+    # _idx_accu = np.array([])
+    # idx_amp = 1
+    # for act in ['P1','A1','P2','A2']:
+    #     _amp_neuron =        modelfit[f'sess{fx}'][act]['par'][:,idx_amp][keep_idx]
+    #     _var_neuron = np.var(modelfit[f'sess{fx}'][act]['data'],axis=1)[keep_idx]    
+    #     _amp_frac, _var_frac, _idx_topamp = functions.find_top_90_cells(_amp_neuron,_var_neuron,percentage=0.9)
+    #     _idx_accu = np.concatenate((_idx_accu,_idx_topamp))
+    # _idx_topamp = np.unique(_idx_accu).astype(int)
+    # keep_idx_topamp = keep_idx[_idx_topamp]
+    # keep = np.zeros_like(keep,dtype=bool)
+    # keep[keep_idx_topamp] = True
     
     
     # neural activity - outlier neurons removed
@@ -331,7 +327,7 @@ rev = 'dS+'
 sel = 'S1+'
 act = 'dR'
 sgn = '-'
-for fx in range(nfile):
+for fx in range(2):
 
     if sgn == '+':     
         _idx_la = learned_activity[f'sess{fx}'][rev][sel][act] > 0
@@ -391,34 +387,35 @@ reverse = ['dS+', 'dS-']
 selectivity = ['S1+', 'S1-']
 activity = [['dP','dA'],['dR','dL']]
 signs = ['+','-']
-for rev in reverse:
-    for sel in selectivity:
-        if rev == 'dS-':
-            _activity = activity[0]
-        elif rev == 'dS+':
-            _activity = activity[1]
-        for act in _activity:             
-            for sgn in signs:           
-                
-                # dominant vs. nondominant
-                dominant_mode = (
-                    (rev == 'dS-' and sel == 'S1+' and act == 'dP' and sgn == '-') or
-                    (rev == 'dS-' and sel == 'S1+' and act == 'dA' and sgn == '+') or
-                    (rev == 'dS-' and sel == 'S1-' and act == 'dP' and sgn == '+') or
-                    (rev == 'dS-' and sel == 'S1-' and act == 'dA' and sgn == '-') or
-                    (rev == 'dS+' and sel == 'S1+' and act == 'dR' and sgn == '-') or
-                    (rev == 'dS+' and sel == 'S1+' and act == 'dL' and sgn == '+') or
-                    (rev == 'dS+' and sel == 'S1-' and act == 'dR' and sgn == '+') or
-                    (rev == 'dS+' and sel == 'S1-' and act == 'dL' and sgn == '-')
-                )
-                if dominant_mode:
-                    mode = 'dominant'
-                else:
-                    mode = 'non-dominant'
+for fx in range(nfile):
+    for rev in reverse:
+        for sel in selectivity:
+            if rev == 'dS-':
+                _activity = activity[0]
+            elif rev == 'dS+':
+                _activity = activity[1]
+            for act in _activity:             
+                for sgn in signs:           
+                    
+                    # dominant vs. nondominant
+                    dominant_mode = (
+                        (rev == 'dS-' and sel == 'S1+' and act == 'dP' and sgn == '-') or
+                        (rev == 'dS-' and sel == 'S1+' and act == 'dA' and sgn == '+') or
+                        (rev == 'dS-' and sel == 'S1-' and act == 'dP' and sgn == '+') or
+                        (rev == 'dS-' and sel == 'S1-' and act == 'dA' and sgn == '-') or
+                        (rev == 'dS+' and sel == 'S1+' and act == 'dR' and sgn == '-') or
+                        (rev == 'dS+' and sel == 'S1+' and act == 'dL' and sgn == '+') or
+                        (rev == 'dS+' and sel == 'S1-' and act == 'dR' and sgn == '+') or
+                        (rev == 'dS+' and sel == 'S1-' and act == 'dL' and sgn == '-')
+                    )
+                    if dominant_mode:
+                        mode = 'dominant'
+                    else:
+                        mode = 'non-dominant'
 
-                
-                P2_dict = {ii:[] for ii in np.arange(nbins)}
-                for fx in range(nfile):                    
+                    
+                    P2_dict = {ii:[] for ii in np.arange(nbins)}
+                    # for fx in range(nfile):                    
                     if sgn == '+':     
                         _idx_la = learned_activity[f'sess{fx}'][rev][sel][act] > 0
                     elif sgn == '-':
@@ -432,49 +429,53 @@ for rev in reverse:
                     for key, val in zip(P1_idx, _peak_time_P2):
                         P2_dict[key].append(val)    
 
-                P2_histogram = np.zeros((nbins,nbins-1))
-                for ii in range(nbins):
-                    cnt, bins = np.histogram(P2_dict[ii],bins=peak_time, density=False)
-                    P2_histogram[ii] = cnt
-                P2_histogram[P2_histogram==0] = 0
+                    P2_histogram = np.zeros((nbins,nbins-1))
+                    for ii in range(nbins):
+                        cnt, bins = np.histogram(P2_dict[ii],bins=peak_time, density=False)
+                        P2_histogram[ii] = cnt
+                    P2_histogram[P2_histogram==0] = 0
 
-                min_tix = np.where(peak_time >= tix_sample)[0][0]
-                max_tix = np.where(peak_time >= tix_response+8)[0][0]
-                P2_histogram_trim = P2_histogram[min_tix:max_tix,min_tix:max_tix]
-                # P2_histogram_trim = P2_histogram_trim / np.sum(P2_histogram_trim)
-                _tvec = tvec[peak_time]
-                _min_time = _tvec[min_tix]
-                _max_time = _tvec[max_tix]
-                _idline = _tvec[np.arange(min_tix,max_tix)]
-                _tsample = _tvec[peak_time >= tix_sample][0]
-                _tdelay  = _tvec[peak_time >= tix_delay][0]
-                _tresponse = _tvec[peak_time >= tix_response][0]
-        
-                # sigma = 1  # controls the width of the Gaussian
-                # img_smooth = gaussian_filter(P2_histogram_trim, sigma=sigma)
-                vmax = 5*((np.std(P2_histogram_trim) * 3)//5 + 1)
-                
-                fig, ax = plt.subplots(figsize=(4,3))
-                im = plt.imshow(P2_histogram_trim, cmap='jet', origin='lower', aspect='auto', vmin=0, vmax=vmax, extent=[_min_time,_max_time,_min_time,_max_time], rasterized=True)
-                plt.plot(_idline,_idline,c='w',linestyle='--')
-                plt.axvline(_tsample, color='w', linestyle='--', lw=0.8)
-                plt.axvline(_tdelay, color='w', linestyle='--', lw=0.8)
-                plt.axvline(_tresponse, color='w', linestyle='--', lw=0.8)
-                plt.axhline(_tsample, color='w', linestyle='--', lw=0.8)
-                plt.axhline(_tdelay, color='w', linestyle='--', lw=0.8)
-                plt.axhline(_tresponse, color='w', linestyle='--', lw=0.8)
-                plt.colorbar(im)
-                plt.xlim([_min_time,_max_time])
-                plt.ylim([_min_time,_max_time])
-                plt.tight_layout()
-                
-                if mode == 'dominant':
-                    plt.savefig('figure/neural_dynamics/diff_peak_time/relative_time/model_peak_time/dominant/' + rev + '_' + sel + '_' + act + sgn + '.png',dpi=300)
-                    # plt.savefig('figure/neural_dynamics/diff_peak_time/relative_time/model_peak_time/dominant/' + rev + '_' + sel + '_' + act + sgn + '.pdf')
-                elif mode == 'non-dominant':
-                    plt.savefig('figure/neural_dynamics/diff_peak_time/relative_time/model_peak_time/nondominant/' + rev + '_' + sel + '_' + act + sgn + '.png',dpi=300)
-                    # plt.savefig('figure/neural_dynamics/diff_peak_time/relative_time/model_peak_time/nondominant/' + rev + '_' + sel + '_' + act + sgn + '.pdf')                    
-                plt.close()
+                    min_tix = np.where(peak_time >= tix_sample)[0][0]
+                    max_tix = np.where(peak_time >= tix_response+8)[0][0]
+                    P2_histogram_trim = P2_histogram[min_tix:max_tix,min_tix:max_tix]
+                    # P2_histogram_trim = P2_histogram_trim / np.sum(P2_histogram_trim)
+                    _tvec = tvec[peak_time]
+                    _min_time = _tvec[min_tix]
+                    _max_time = _tvec[max_tix]
+                    _idline = _tvec[np.arange(min_tix,max_tix)]
+                    _tsample = _tvec[peak_time >= tix_sample][0]
+                    _tdelay  = _tvec[peak_time >= tix_delay][0]
+                    _tresponse = _tvec[peak_time >= tix_response][0]
+            
+                    # sigma = 1  # controls the width of the Gaussian
+                    # img_smooth = gaussian_filter(P2_histogram_trim, sigma=sigma)
+                    vmax = 5*((np.std(P2_histogram_trim) * 3)//5 + 1)
+                    
+                    fig, ax = plt.subplots(figsize=(4,3))
+                    im = plt.imshow(P2_histogram_trim, cmap='jet', origin='lower', aspect='auto', vmin=0, vmax=vmax, extent=[_min_time,_max_time,_min_time,_max_time], rasterized=True)
+                    plt.plot(_idline,_idline,c='w',linestyle='--')
+                    plt.axvline(_tsample, color='w', linestyle='--', lw=0.8)
+                    plt.axvline(_tdelay, color='w', linestyle='--', lw=0.8)
+                    plt.axvline(_tresponse, color='w', linestyle='--', lw=0.8)
+                    plt.axhline(_tsample, color='w', linestyle='--', lw=0.8)
+                    plt.axhline(_tdelay, color='w', linestyle='--', lw=0.8)
+                    plt.axhline(_tresponse, color='w', linestyle='--', lw=0.8)
+                    plt.colorbar(im)
+                    plt.xlim([_min_time,_max_time])
+                    plt.ylim([_min_time,_max_time])
+                    plt.tight_layout()
+                    
+                    if mode == 'dominant':
+                        figpath = 'figure/neural_dynamics/diff_peak_time/relative_time/model_peak_time/dominant/' + rev + '_' + sel + '_' + act + sgn + '/'
+                        os.makedirs(figpath, exist_ok=True)
+                        plt.savefig(figpath + f'sess{fx}' + '.png',dpi=300)
+                        # plt.savefig('figure/neural_dynamics/diff_peak_time/relative_time/model_peak_time/dominant/' + rev + '_' + sel + '_' + act + sgn + '.pdf')
+                    elif mode == 'non-dominant':
+                        figpath = 'figure/neural_dynamics/diff_peak_time/relative_time/model_peak_time/nondominant/' + rev + '_' + sel + '_' + act + sgn + '/'
+                        os.makedirs(figpath, exist_ok=True)
+                        plt.savefig(figpath + f'sess{fx}' + '.png',dpi=300)
+                        # plt.savefig('figure/neural_dynamics/diff_peak_time/relative_time/model_peak_time/nondominant/' + rev + '_' + sel + '_' + act + sgn + '.pdf')                    
+                    plt.close()
 
 #%%
 plt.figure(figsize=(1.5,9))

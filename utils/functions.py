@@ -2,65 +2,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 from itertools import product
 import matplotlib.colors as mcolors
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.linear_model import LinearRegression
+# from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+# from sklearn.linear_model import LinearRegression
 import h5py 
 import os
-
-
-# def compute_CD_dotproduct(data, data_type):
-    
-#     tsample   = 1.57
-#     tdelay    = 2.87
-#     tresponse = 4.17
-#     dt        = 1/6
-#     ntimestep = 47
-#     tvec      = dt * np.arange(ntimestep)
-#     tix_delay    = np.where(tvec > tdelay)[0][0]
-#     tix_response = np.where(tvec > tresponse)[0][0]
-
-#     opto_sess1 = data[data_type][0]
-#     opto_sess2 = data[data_type][1]
-#     ncat, ncell = opto_sess1.shape
-#     lickright = 0
-#     lickleft  = 1
-
-#     ntrials_1R = opto_sess1[lickright,0].shape[1]
-#     ntrials_1L = opto_sess1[lickleft,0].shape[1]
-#     ntrials_2R = opto_sess2[lickright,0].shape[1]
-#     ntrials_2L = opto_sess2[lickleft,0].shape[1]
-    
-#     frac_train_trials = 0.5
-#     ntrials_train_1R = int(ntrials_1R * frac_train_trials)
-#     ntrials_train_1L = int(ntrials_1L * frac_train_trials)
-#     ntrials_train_2R = int(ntrials_2R * frac_train_trials)
-#     ntrials_train_2L = int(ntrials_2L * frac_train_trials)
-
-#     opto_1R = np.zeros((ncell,ntimestep))
-#     opto_1L = np.zeros((ncell,ntimestep))
-#     opto_2R = np.zeros((ncell,ntimestep))
-#     opto_2L = np.zeros((ncell,ntimestep))
-#     for cell in range(ncell):        
-#         #------- first half trials ----------#
-#         opto_1R[cell] = np.mean(opto_sess1[lickright,cell][:,:ntrials_train_1R],axis=1)
-#         opto_1L[cell] = np.mean(opto_sess1[lickleft,cell][:,:ntrials_train_1L],axis=1)
-#         opto_2R[cell] = np.mean(opto_sess2[lickright,cell][:,:ntrials_train_2R],axis=1)
-#         opto_2L[cell] = np.mean(opto_sess2[lickleft,cell][:,:ntrials_train_2L],axis=1)    
-
-#         # #------- random half trials ---------#
-#         # opto_1R[cell] = np.mean(opto_sess1[lickright,cell][:,np.sort(np.random.randint(0, ntrials_1R, ntrials_train_1R))],axis=1)
-#         # opto_1L[cell] = np.mean(opto_sess1[lickleft,cell][:,np.sort(np.random.randint(0, ntrials_1L, ntrials_train_1L))],axis=1)
-#         # opto_2R[cell] = np.mean(opto_sess2[lickright,cell][:,np.sort(np.random.randint(0, ntrials_2R, ntrials_train_2R))],axis=1)
-#         # opto_2L[cell] = np.mean(opto_sess2[lickleft,cell][:,np.sort(np.random.randint(0, ntrials_2L, ntrials_train_2L))],axis=1)    
-#     CD_sess1            = opto_1R - opto_1L
-#     CD_sess2            = opto_2R - opto_2L
-#     CD_sess1_population = np.mean(CD_sess1[:,tix_response-4:tix_response], axis=1)
-#     CD_sess2_population = np.mean(CD_sess2[:,tix_response-4:tix_response], axis=1)    
-#     # CD_sess1_population = np.mean(CD_sess1[:,tix_delay:tix_response], axis=1)
-#     # CD_sess2_population = np.mean(CD_sess2[:,tix_delay:tix_response], axis=1)
-#     CD_dotproduct       = np.inner(CD_sess1_population, CD_sess2_population) / (np.linalg.norm(CD_sess1_population) * np.linalg.norm(CD_sess2_population))
-
-#     return CD_dotproduct, CD_sess1_population, CD_sess2_population
+import copy
+from scipy.optimize import curve_fit
 
 def find_all_cells(CD_sess1_population, CD_sess2_population):    
     all_cells_1R, all_cells_2R = np.where(CD_sess1_population >= 0)[0], np.where(CD_sess2_population >= 0)[0]
@@ -116,9 +63,7 @@ def create_plot_sf(cmap_type, sf):
     plot_sf = cmap(norm(sf_sum))
     plot_sf[sf_sum==0, 3] = 0
     return plot_sf    
-            
-            
-
+                        
 def split_trials(data, data_type):
     
     tsample   = 1.57
@@ -209,18 +154,18 @@ def compute_CD_dotproduct(opto_1R_set1,opto_1L_set1,opto_2R_set1,opto_2L_set1,ti
     
     ncell     = opto_1R_set1.shape[0]
     ntimestep = opto_1R_set1.shape[1]
-    opto_1R   = np.zeros((ncell,ntimestep))
-    opto_1L   = np.zeros((ncell,ntimestep))
-    opto_2R   = np.zeros((ncell,ntimestep))
-    opto_2L   = np.zeros((ncell,ntimestep))        
+    opto_1R_trialavg   = np.zeros((ncell,ntimestep))
+    opto_1L_trialavg   = np.zeros((ncell,ntimestep))
+    opto_2R_trialavg   = np.zeros((ncell,ntimestep))
+    opto_2L_trialavg   = np.zeros((ncell,ntimestep))        
     for cell in range(ncell):        
-        # use train trials
-        opto_1R[cell] = np.mean(opto_1R_set1[cell,:,:],axis=1)
-        opto_1L[cell] = np.mean(opto_1L_set1[cell,:,:],axis=1)
-        opto_2R[cell] = np.mean(opto_2R_set1[cell,:,:],axis=1)
-        opto_2L[cell] = np.mean(opto_2L_set1[cell,:,:],axis=1)                                    
-    CD_sess1            = opto_1R - opto_1L
-    CD_sess2            = -(opto_2R - opto_2L)
+        # average over trials
+        opto_1R_trialavg[cell] = np.mean(opto_1R_set1[cell,:,:],axis=1)
+        opto_1L_trialavg[cell] = np.mean(opto_1L_set1[cell,:,:],axis=1)
+        opto_2R_trialavg[cell] = np.mean(opto_2R_set1[cell,:,:],axis=1)
+        opto_2L_trialavg[cell] = np.mean(opto_2L_set1[cell,:,:],axis=1)                                    
+    CD_sess1            = opto_1R_trialavg - opto_1L_trialavg
+    CD_sess2            = -(opto_2R_trialavg - opto_2L_trialavg)
     CD_duration         = 4
     CD_sess1_population = np.mean(CD_sess1[:,tix_response-CD_duration:tix_response], axis=1)
     CD_sess2_population = np.mean(CD_sess2[:,tix_response-CD_duration:tix_response], axis=1)
@@ -520,7 +465,6 @@ def compute_CD_delay(data, data_type, reference):
             opto_1R_traintrials, opto_1L_traintrials, opto_2R_traintrials, opto_2L_traintrials)
     
 
-
 def compute_CD_sample_update(data, data_type):
     
     tsample   = 1.57
@@ -705,8 +649,6 @@ def compute_CD_sample(data, data_type):
             project_sample_1P, project_sample_1A, project_sample_2P, project_sample_2A,)
     
 
-
-
 def compute_CD_sample_late(data, data_type, tix):
     
     tsample   = 1.57
@@ -783,8 +725,6 @@ def compute_CD_sample_late(data, data_type, tix):
 
     return (CD_sample_late_1, CD_sample_late_2)
     
-                
-                
                 
 def compute_CD_context(data, data_type):
     
@@ -1393,3 +1333,693 @@ def find_top_90_cells(amp_neuron, var_neuron, threshold):
     amp_frac_to_get_var90 = amp_frac[np.where(var_frac > threshold)[0][0]]
     cells_top90           = find_top_cells_of(amp_neuron, amp_frac_to_get_var90)    
     return amp_frac, var_frac, cells_top90
+
+def two_sided_exp(t, b, A, tp, tau_r, tau_d):
+    return b + A * np.where(
+        t < tp,
+        np.exp((t - tp) / tau_r),
+        np.exp(-(t - tp) / tau_d)
+    )
+
+def fit_exp_decay_to_neuron_activity(nfile, P1_set1, A1_set1, P2_set1, A2_set1,
+                                     tvec, tix_start, tix_end):
+    ntimestep_fit = tix_end - tix_start
+    modelfit_sess = {'P1': {},'A1':{},'P2':{},'A2':{}}
+    modelfit = {f'sess{i}': copy.deepcopy(modelfit_sess) for i in range(nfile)}
+    max_retry = 10
+    dataset = ['P1','A1','P2','A2']
+    for fx in range(nfile):
+        print('----- Session ', fx, '-----')        
+        for _data in dataset:
+            if _data == 'P1':
+                data_fit = P1_set1[fx][:,tix_start:tix_end]
+            if _data == 'A1':
+                data_fit = A1_set1[fx][:,tix_start:tix_end]
+            if _data == 'P2':
+                data_fit = P2_set1[fx][:,tix_start:tix_end]
+            if _data == 'A2':
+                data_fit = A2_set1[fx][:,tix_start:tix_end]
+                        
+            print('Fit ', _data)
+            
+            ncell = data_fit.shape[0]
+            expvar = np.zeros(ncell)
+            y_data_save = np.zeros((ncell,ntimestep_fit))
+            y_fit_save = np.zeros((ncell,ntimestep_fit))
+            y_par_save = np.zeros((ncell,5))
+            err_cell = []
+            for celli in range(ncell): 
+                # data to fit
+                y = data_fit[celli]
+                t = tvec[tix_start:tix_end]
+                
+                ############################################
+                # Model parameters: b, A, tp, tau_r, tau_d #
+                ############################################
+                # Initial guesses
+                b0 = np.percentile(y, 10)
+                A0 = np.max(y) - b0
+                tp0 = t[np.argmax(y)]
+                tau_r0 = 0.5
+                tau_d0 = 1.0
+                p0 = [b0, A0, tp0, tau_r0, tau_d0]            
+                # Bounds: b, A, tp, tau_r, tau_d
+                bounds = (
+                    [0, 0, t.min(), 0, 0],
+                    [100, 100, t.max(), t[-1]-t[0], t[-1]-t[0]])
+                
+                success = False
+                maxfev = 50000
+                peak_shifted = -1
+                # fit the data. Allow retries.
+                for retry in range(max_retry):                
+                    try:
+                        popt, pcov = curve_fit(
+                            two_sided_exp,
+                            t,
+                            y,
+                            p0=p0,
+                            bounds=bounds,
+                            maxfev=maxfev
+                        )
+                        b, A, tp, tau_r, tau_d = popt
+
+                        # Plot fit
+                        y_fit = two_sided_exp(t, *popt)
+                        explained_variance = 1 - np.var(y - y_fit) / np.var(y)
+                        expvar[celli] = explained_variance        
+                        
+                        # save
+                        y_data_save[celli] = y
+                        y_fit_save[celli]  = y_fit
+                        y_par_save[celli]  = [b,A,tp,tau_r,tau_d]
+                        
+                        success= True
+                        break
+                    except Exception:
+                        print('retry fitting ', retry)
+                        if retry > 5:
+                            peak_shifted -= 1
+                        tp0 = t[np.argsort(y)[peak_shifted]]
+                        p0 = [b0, A0, tp0, tau_r0, tau_d0]
+                        maxfev += 50000
+
+                if not success:
+                    err_cell.append(celli)
+                    y_data_save[celli] = y
+
+            # assert err_cnt == 0, "cells not fitted"
+            modelfit[f'sess{fx}'][_data]['data'] = y_data_save
+            modelfit[f'sess{fx}'][_data]['fit'] = y_fit_save
+            modelfit[f'sess{fx}'][_data]['par'] = y_par_save
+            modelfit[f'sess{fx}'][_data]['expvar'] = expvar
+            modelfit[f'sess{fx}'][_data]['err'] = err_cell
+    return modelfit
+
+def get_fit_summary(nfile, modelfit, acts):
+    
+    idx_amp = 1
+    idx_tp  = 2
+    idx_taur = 3
+    idx_taud = 4
+    
+    fit_summary = {
+        'var': {},
+        'amp': {},
+        'tp': {},
+        'taur': {},
+        'taud': {},
+        'expvar_neuron': {},
+        'expvar_pop': {},
+        'nonoutlier': {},
+    }
+    
+    for fx in range(nfile):
+        sess = modelfit[f'sess{fx}']
+
+        data = {act: sess[act]['data'] for act in acts}
+        fit  = {act: sess[act]['fit']  for act in acts}
+        amp  = {act: sess[act]['par'][:, idx_amp] for act in acts}
+        tp   = {act: sess[act]['par'][:, idx_tp]  for act in acts}
+        taur = {act: sess[act]['par'][:, idx_taur]  for act in acts}
+        taud = {act: sess[act]['par'][:, idx_taud]  for act in acts}
+
+        max_vals = [np.max(data[act], axis=1) for act in acts]
+        keep_nonoutliers = remove_outliers_alltrials_fixedtime(*max_vals, maxstd=5)
+        keep_nonzero = np.logical_and.reduce([np.sum(data[act], axis=1) > 0 for act in acts])
+        keep = keep_nonoutliers & keep_nonzero
+
+        ncell = np.sum(keep)
+        expvar_neuron = np.zeros((len(acts), ncell))
+        expvar_pop    = np.zeros(len(acts))
+        var_neuron    = np.zeros((len(acts), ncell))
+        amp_neuron    = np.zeros((len(acts), ncell))
+        tp_neuron     = np.zeros((len(acts), ncell))
+        taur_neuron   = np.zeros((len(acts), ncell))
+        taud_neuron   = np.zeros((len(acts), ncell))
+        for ix, act in enumerate(acts):
+            _data = data[act][keep]
+            _fit  = fit[act][keep]
+
+            expvar_neuron[ix] = 1 - np.var(_fit - _data, axis=1) / np.var(_data, axis=1)
+            expvar_pop[ix]    = 1 - np.var(_fit - _data) / np.var(_data)
+            var_neuron[ix]    = np.var(_data, axis=1)
+            amp_neuron[ix]    = amp[act][keep]
+            tp_neuron[ix]     = tp[act][keep]
+            taur_neuron[ix]   = taur[act][keep]
+            taud_neuron[ix]   = taud[act][keep]
+
+        fit_summary['expvar_neuron'][fx] = expvar_neuron
+        fit_summary['expvar_pop'][fx]    = expvar_pop
+        fit_summary['var'][fx]    = var_neuron
+        fit_summary['amp'][fx]    = amp_neuron
+        fit_summary['tp'][fx]     = tp_neuron
+        fit_summary['taur'][fx]   = taur_neuron
+        fit_summary['taud'][fx]   = taud_neuron
+        fit_summary['nonoutlier'][fx] = np.where(keep)[0]
+    return fit_summary
+    
+def get_fit_summary_topcells(t, nfile, acts, actidx, dict_topcells, fit_summary):
+
+    fit_summary_topcells_fotmat = {
+        'expvar_neuron':        {i:[] for i in range(nfile)},
+        'taur':                 {i:[] for i in range(nfile)},
+        'taud':                 {i:[] for i in range(nfile)},
+        'amp':                  {i:[] for i in range(nfile)},
+        'expvar_neuron_at_t':   {i:{} for i in range(nfile)},
+        'taur_at_t':            {i:{} for i in range(nfile)},
+        'taud_at_t':            {i:{} for i in range(nfile)},
+        'amp_at_t':             {i:{} for i in range(nfile)}
+    }
+    fit_summary_topcells = {act: copy.deepcopy(fit_summary_topcells_fotmat) for act in acts}
+    
+    for act in acts:
+        for fx in range(nfile):            
+            # all top cells
+            nonoutlier  = fit_summary['nonoutlier'][fx]
+            ncell       = len(nonoutlier)
+            expvar      = fit_summary['expvar_neuron'][fx][actidx[act]]
+            taur        = fit_summary['taur'][fx][actidx[act]]
+            taud        = fit_summary['taud'][fx][actidx[act]]
+            amp         = fit_summary['amp'][fx][actidx[act]]
+            # top cells at t
+            expvar_at_t_fx = {i:[] for i in range(len(t))}
+            taur_at_t_fx   = {i:[] for i in range(len(t))}
+            taud_at_t_fx   = {i:[] for i in range(len(t))}
+            amp_at_t_fx    = {i:[] for i in range(len(t))}
+            for i in range(len(t)):
+                expvar_at_t_fx[i] = expvar[dict_topcells[act]['topcells_at_t'][fx][i]]
+                taur_at_t_fx[i]   = taur[dict_topcells[act]['topcells_at_t'][fx][i]]
+                taud_at_t_fx[i]   = taud[dict_topcells[act]['topcells_at_t'][fx][i]]    
+                amp_at_t_fx[i]    = amp[dict_topcells[act]['topcells_at_t'][fx][i]]
+            # save
+            fit_summary_topcells[act]['expvar_neuron'][fx]       = expvar[dict_topcells[act]['topcells'][fx]]
+            fit_summary_topcells[act]['taur'][fx]                = taur[dict_topcells[act]['topcells'][fx]]
+            fit_summary_topcells[act]['taud'][fx]                = taud[dict_topcells[act]['topcells'][fx]]
+            fit_summary_topcells[act]['amp'][fx]                 = amp[dict_topcells[act]['topcells'][fx]]
+            fit_summary_topcells[act]['expvar_neuron_at_t'][fx]  = expvar_at_t_fx
+            fit_summary_topcells[act]['taur_at_t'][fx]           = taur_at_t_fx
+            fit_summary_topcells[act]['taud_at_t'][fx]           = taud_at_t_fx        
+            fit_summary_topcells[act]['amp_at_t'][fx]            = amp_at_t_fx                    
+    return fit_summary_topcells
+
+def shuffle_topcells_at_t(_topcells_fx,_topcells_at_t_fx):
+    # mapping from topcells to shuffled topcells
+    _topcells_fx_shuffled = np.random.permutation(_topcells_fx)
+    _mapping = dict(zip(_topcells_fx,_topcells_fx_shuffled))
+    # shuffle topcells at t
+    _topcells_at_t_fx_shuffled = copy.deepcopy(_topcells_at_t_fx)
+    _ntime = len(_topcells_at_t_fx)
+    # apply the mapping to the topcells at every t
+    for ti in range(_ntime):
+        _topcells_at_t_fx_shuffled[ti] = np.array([_mapping[v] for v in _topcells_at_t_fx[ti]])
+    return _topcells_at_t_fx_shuffled
+
+def sort_cells_by_var(_data):
+    '''
+    variance vs. second-moment
+    '''    
+    _data_sq = _data**2 # second-moment
+    # _data_sq = (_data - np.mean(_data,axis=0))**2 # variance
+    # normalize population activity at every t
+    _data_norm = _data_sq / np.sum(_data_sq,axis=0)
+    # sort the neurons by its contribution to variance
+    _cells_sorted_at_t = np.argsort(_data_norm,axis=0)[::-1]
+    _data_sorted = np.take_along_axis(_data_norm, _cells_sorted_at_t, axis=0)
+    # cumulative sum at every t
+    _data_cumsum = np.cumsum(_data_sorted,axis=0)
+    return _cells_sorted_at_t, _data_cumsum
+
+def create_binary_data(_data, _thr_var):
+    _ncell, _ntime = _data.shape
+    _cells_sorted_at_t, _data_cumsum = sort_cells_by_var(_data)
+    _idx_cross = np.argmax(_data_cumsum >= _thr_var, axis=0)
+    _topcells_at_t = {i:[] for i in range(_ntime)}
+    _newcells_at_t = {i:[] for i in range(_ntime)}
+    _topcells_at_t_shuffled = {i:[] for i in range(_ntime)}
+    _topcells_prev = []
+    _data_binary = np.zeros_like(_data)
+    for i in range(_ntime):
+        # top cells at t
+        _topcells_at_t[i] = _cells_sorted_at_t[:_idx_cross[i],i]
+        # create binary data
+        _data_binary[_topcells_at_t[i],i] = 1    
+        # only the new top cells added at t
+        _newcells_at_t[i] = _topcells_at_t[i][~np.isin(_topcells_at_t[i],_topcells_prev)]
+        # top cells accumulated over time
+        _topcells_prev = np.concatenate((_topcells_prev,_newcells_at_t[i]))
+    _expvar_at_t = np.array([_data_cumsum[_idx_cross[i],i] for i in range(_ntime)])
+    return _expvar_at_t, _topcells_at_t, _newcells_at_t, _data_binary, _cells_sorted_at_t, _data_cumsum
+
+def get_dict_topcells(acts, nfile, thr_var, modelfit, fit_summary):
+    
+    dict_topcells_format = {
+        'topcells':                 {i:[] for i in range(nfile)},
+        'topcells_at_t':            {i:[] for i in range(nfile)},
+        'topcells_at_t_shuffled':   {i:[] for i in range(nfile)},
+        'newcells_at_t':            {i:[] for i in range(nfile)},
+        'expvar_at_t':              {i:[] for i in range(nfile)},
+        'data_binary':              {i:[] for i in range(nfile)},
+        'cells_sorted_at_t':        {i:[] for i in range(nfile)},
+        'data_cumsum':              {i:[] for i in range(nfile)}
+    }
+    dict_topcells = {act: copy.deepcopy(dict_topcells_format) for act in acts}    
+    
+    for act in acts:
+        for fx in range(nfile):
+            nonoutlier = fit_summary['nonoutlier'][fx]
+            _data   = modelfit[f'sess{fx}'][act]['data'][nonoutlier,:]
+            _expvar_at_t_fx, _topcells_at_t_fx,  _newcells_at_t_fx, \
+            _data_binary_fx, _cells_sorted_at_t, _data_cumsum = create_binary_data(_data,thr_var)
+            _topcells_fx = np.unique(np.concatenate(list(_topcells_at_t_fx.values())))
+            dict_topcells[act]['expvar_at_t'][fx]            = _expvar_at_t_fx
+            dict_topcells[act]['topcells_at_t'][fx]          = _topcells_at_t_fx
+            dict_topcells[act]['topcells_at_t_shuffled'][fx] = shuffle_topcells_at_t(_topcells_fx,_topcells_at_t_fx)
+            dict_topcells[act]['newcells_at_t'][fx]          = _newcells_at_t_fx
+            dict_topcells[act]['topcells'][fx]               = _topcells_fx
+            dict_topcells[act]['data_binary'][fx]            = _data_binary_fx
+            dict_topcells[act]['cells_sorted_at_t'][fx]      = _cells_sorted_at_t
+            dict_topcells[act]['data_cumsum'][fx]            = _data_cumsum                
+    return dict_topcells    
+
+def exp_decay(t, tau, A, b):
+    return A * np.exp(-t / tau) + b
+
+def exp_rise(t, tau, A, b):
+    return A * np.exp(t / tau) + b
+
+def fit_decay_of_active_cells_linear(t, _data_to_fit):
+
+    n_time = len(t)
+    linear_params = np.full((n_time, 2), np.nan)   # slope, intercept
+    linear_r2     = np.full(n_time, np.nan)
+    fit_trace      = {i: [] for i in range(n_time)}
+
+    for i in range(n_time):
+
+        telapsed = t[i:]
+        y = _data_to_fit[i, i:]
+
+        # remove NaNs
+        keep = np.isfinite(telapsed) & np.isfinite(y)
+        xfit = telapsed[keep] - t[i]   # elapsed time starts at 0
+        yfit = y[keep]
+
+        if len(yfit) < 2:
+            continue
+
+        try:
+            # Linear regression: y = slope*x + intercept
+            slope, intercept = np.polyfit(xfit, yfit, 1)
+
+            linear_params[i] = [slope, intercept]
+
+            ypred = slope * xfit + intercept
+
+            if np.var(yfit) > 0:
+                linear_r2[i] = 1 - np.var(yfit - ypred) / np.var(yfit)
+            else:
+                linear_r2[i] = np.nan
+
+            fit_trace[i] = np.vstack((yfit, ypred))
+
+        except Exception:
+            pass
+
+    return linear_params, linear_r2, fit_trace
+
+def fit_decay_of_active_cells_exponential(t,_data_to_fit):
+        
+    n_time = len(t)
+    dt = t[1]-t[0]
+    exp_params = np.full((n_time, 3), np.nan)   # A, tau, b
+    exp_r2     = np.full(n_time, np.nan)
+    fit_trace  = {i:[] for i in range(n_time)}
+    for i in range(n_time):
+
+        telapsed = t[i:]
+        y = _data_to_fit[i, i:]
+
+        # remove NaNs
+        keep = np.isfinite(telapsed) & np.isfinite(y)
+        xfit = telapsed[keep] - t[i]   # elapsed time starts at 0
+        yfit = y[keep]
+
+        if len(yfit) < 2:
+            continue
+
+        try:
+            p0 = [dt* len(yfit) / 3, yfit[0] - yfit[-1], yfit[-1]]
+            bounds = ([1e-6, 0, -np.inf], [dt* 20, 2, 2])
+
+            popt, pcov = curve_fit(
+                exp_decay,
+                xfit,
+                yfit,
+                p0=p0,
+                bounds=bounds,
+                maxfev=20000
+            )
+
+            tau, A, b = popt
+            exp_params[i] = [tau, A, b]
+
+            ypred = exp_decay(xfit, *popt)
+            exp_r2[i] = 1 - np.var(yfit - ypred) / np.var(yfit)
+            fit_trace[i] = np.vstack((yfit,ypred))
+        except Exception:
+            pass
+    return exp_params, exp_r2, fit_trace
+
+def exp_two_phase(x, A1, tau1, b1, A2, tau2, tbreak):
+    ybreak = exp_rise(tbreak, A1, tau1, b1)
+    dt = x[1] - x[0]
+    return np.where(
+        x <= tbreak,
+        exp_rise(x, A1, tau1, b1),
+        exp_rise(x - tbreak, A2, tau2, ybreak-A2)
+    )
+
+def fit_rise_of_active_cells_linear(t, _data_to_fit):
+
+    tix_delay = 8
+    tix_response = 16
+    tstart = tix_delay - 1
+    tref = np.arange(tix_delay, tix_response)
+
+    pre_linear_params = np.full((len(tref), 2), np.nan)   # slope, intercept
+    pre_linear_r2     = np.full(len(tref), np.nan)
+    pre_fit_trace     = np.zeros((len(tref), 2, tstart + 1))
+
+    peri_linear_params = np.full((len(tref), 2), np.nan)  # slope, intercept
+    peri_linear_r2     = np.full(len(tref), np.nan)
+    peri_fit_trace     = {i: [] for i in range(len(tref))}
+
+    fit_duration = ['pre_delay', 'peri_delay']
+
+    for dur in fit_duration:
+        for i, tr in enumerate(tref):
+
+            if dur == 'pre_delay':
+                tid_span = np.arange(tstart + 1)
+
+            if dur == 'peri_delay':
+                tid_span = np.arange(tstart, tr + 1)
+
+            tspan = t[tid_span]
+            yfit = _data_to_fit[tr, tid_span]
+            xfit = tspan - tspan[0]
+
+            if len(yfit) < 2:
+                continue
+
+            try:
+                # y = slope * x + intercept
+                slope, intercept = np.polyfit(xfit, yfit, 1)
+                ypred = slope * xfit + intercept
+
+                if np.var(yfit) > 0:
+                    r2 = 1 - np.var(yfit - ypred) / np.var(yfit)
+                else:
+                    r2 = np.nan
+
+                if dur == 'pre_delay':
+                    pre_linear_params[i] = [slope, intercept]
+                    pre_linear_r2[i] = r2
+                    pre_fit_trace[i] = np.vstack((yfit, ypred))
+
+                if dur == 'peri_delay':
+                    peri_linear_params[i] = [slope, intercept]
+                    peri_linear_r2[i] = r2
+                    peri_fit_trace[i] = np.vstack((yfit, ypred))
+
+            except Exception:
+                pass
+
+    return (
+        pre_linear_params,
+        pre_linear_r2,
+        pre_fit_trace,
+        peri_linear_params,
+        peri_linear_r2,
+        peri_fit_trace
+    )
+        
+# def fit_rise_of_active_cells(t,_data_to_fit):
+#     n_time = len(t)
+#     dt = t[1] - t[0]
+
+#     tref = np.arange(8, 16)
+#     tstart = 7
+
+#     exp_params = np.full((len(tref), 5), np.nan)   # A1, tau1, b1, A2, tau2
+#     exp_r2 = np.full(len(tref), np.nan)
+#     fit_trace = {i: [] for i in range(len(tref))}
+
+#     for i, tr in enumerate(tref):
+
+#         tid_span = np.arange(tr + 1)
+
+#         tspan = t[tid_span]
+#         yfit = _data_to_fit[tr, tid_span]
+#         xfit = tspan - tspan[0]
+
+#         # Break between pre-delay and peri-delay
+#         tbreak = xfit[tstart]
+
+#         if len(yfit) < 4:
+#             continue
+
+#         try:
+#             p0 = [
+#                 yfit[tstart] - yfit[0],        # A1
+#                 dt * (tstart + 1) / 3,         # tau1
+#                 yfit[0],                       # b1
+#                 yfit[-1] - yfit[tstart],       # A2
+#                 dt * (tr - tstart + 1) / 3     # tau2
+#             ]
+
+#             bounds = (
+#                 [1e-2, 1e-6, -np.inf, 1e-2, 1e-6],
+#                 [2, dt * 20, 10, 2, dt * 20]
+#             )
+
+#             popt, pcov = curve_fit(
+#                 lambda x, A1, tau1, b1, A2, tau2:
+#                     exp_two_phase(x, A1, tau1, b1, A2, tau2, tbreak),
+#                 xfit,
+#                 yfit,
+#                 p0=p0,
+#                 bounds=bounds,
+#                 maxfev=20000
+#             )
+
+#             ypred = exp_two_phase(xfit, *popt, tbreak)
+
+#             exp_params[i] = popt
+#             exp_r2[i] = 1 - np.var(yfit - ypred) / np.var(yfit)
+#             fit_trace[i] = np.vstack((yfit, ypred))
+
+#         except Exception:
+#             pass    
+#     return exp_params, exp_r2, fit_trace
+
+# def fit_rise_of_active_cells(t,_data_to_fit):
+        
+#     n_time = len(t)
+#     dt = t[1]-t[0]
+#     tref = np.arange(8,16) # 9...16
+#     tstart = 7
+#     pre_exp_params = np.full((len(tref), 3), np.nan)   # A, tau, b
+#     pre_exp_r2     = np.full(len(tref), np.nan)
+#     pre_fit_trace  = np.zeros((len(tref),2,tstart+1))
+#     peri_exp_params = np.full((len(tref), 3), np.nan)   # A, tau, b
+#     peri_exp_r2     = np.full(len(tref), np.nan)
+#     peri_fit_trace  = {i:[] for i in range(len(tref))}
+#     fit_duration = ['pre_delay', 'peri_delay']
+#     for dur in fit_duration:
+#         for i, tr in enumerate(tref):
+
+#             if dur == 'pre_delay':
+#                 tid_span = np.arange(tstart+1)
+#             if dur == 'peri_delay':
+#                 tid_span = np.arange(tstart,tr+1)
+#             tspan = t[tid_span]
+#             yfit = _data_to_fit[tr,tid_span]
+#             xfit = tspan - tspan[0]   # elapsed time starts at 0
+
+#             if len(yfit) < 2:
+#                 continue
+
+#             try:
+#                 # A, tau, b
+#                 p0 = [yfit[-1] - yfit[0], dt* len(yfit) / 3, yfit[0]]
+#                 bounds = ([0, 1e-6, -np.inf], [10, dt* 200, 10])
+
+#                 popt, pcov = curve_fit(
+#                     exp_rise,
+#                     xfit,
+#                     yfit,
+#                     p0=p0,
+#                     bounds=bounds,
+#                     maxfev=20000
+#                 )
+
+#                 A, tau, b = popt
+#                 ypred = exp_rise(xfit, *popt)
+                
+#                 if dur == 'pre_delay':
+#                     pre_exp_params[i] = [A, tau, b]
+#                     pre_exp_r2[i] = 1 - np.var(yfit - ypred) / np.var(yfit)
+#                     pre_fit_trace[i] = np.vstack((yfit,ypred))
+#                 if dur == 'peri_delay':
+#                     peri_exp_params[i] = [A, tau, b]
+#                     peri_exp_r2[i] = 1 - np.var(yfit - ypred) / np.var(yfit)
+#                     peri_fit_trace[i] = np.vstack((yfit,ypred))
+
+#             except Exception:
+#                 pass
+#     return peri_exp_params, peri_exp_r2, peri_fit_trace, pre_exp_params, pre_exp_r2, pre_fit_trace
+    
+def topcell_activity(t, fx, dict_topcells, _data_fx_norm, topcells_are_shuffled):
+    # topcells at t: shuffled or not shuffled
+    if not topcells_are_shuffled:
+        _topcells_at_t_fx = dict_topcells['topcells_at_t'][fx]
+    elif topcells_are_shuffled:
+        _topcells_at_t_fx = dict_topcells['topcells_at_t_shuffled'][fx]
+    # average activity of topcells
+    data_fx_top = np.zeros((len(t),len(t)))
+    data_fx_top_norm = np.zeros((len(t),len(t)))
+    for i in range(len(t)):
+        data_fx_top[i]      = np.mean(_data_fx_norm[_topcells_at_t_fx[i]],axis=0)
+        data_fx_top_norm[i] = data_fx_top[i] / data_fx_top[i,i]
+        # data_fx_top_norm[i] = data_fx_top[i] 
+    return data_fx_top_norm
+
+def compute_active_cells_decay(nfile, nact, t, acts, dict_topcells, modelfit, fit_summary, topcells_are_shuffled):
+
+    active_cells_decay_actual  = np.zeros((nact,nfile,len(t),len(t)))
+    active_cells_decay_norm    = np.zeros((nact,nfile,len(t),len(t)))
+    active_cells_decay_binary  = np.zeros((nact,nfile,len(t),len(t)))
+    # active_cells_decay_shuffle          = np.zeros((nfile,len(t),len(t)))
+    for ax, act in enumerate(acts):
+        for fx in range(nfile):
+            nonoutlier = fit_summary['nonoutlier'][fx]
+            data_fx = modelfit[f'sess{fx}'][act]['data'][nonoutlier, :]
+            # actual
+            data_fx_actual = np.copy(data_fx)
+            # normalized
+            data_fx_norm = data_fx / np.linalg.norm(data_fx,axis=0)
+            # data_fx_norm = (data_fx / np.linalg.norm(data_fx,axis=0))**2
+            # binary
+            data_fx_binary = dict_topcells[act]['data_binary'][fx]
+            # # binary shuffle
+            # data_fx_shuffle = np.zeros_like(data_fx_binary)
+            # for ci in range(data_fx_binary.shape[0]):
+            #     numones = np.sum(data_fx_binary[ci]).astype(int)
+            #     randtimes = np.random.permutation(np.arange(len(t)))[:numones]
+            #     data_fx_shuffle[ci,randtimes] = 1
+
+            active_cells_decay_actual[ax,fx]   = topcell_activity(t, fx, dict_topcells[act], data_fx_actual, topcells_are_shuffled)
+            active_cells_decay_norm[ax,fx]     = topcell_activity(t, fx, dict_topcells[act], data_fx_norm,   topcells_are_shuffled)
+            active_cells_decay_binary[ax,fx]   = topcell_activity(t, fx, dict_topcells[act], data_fx_binary, topcells_are_shuffled)
+            # active_cells_decay_shuffle[fx] = topcell_activity(t,fx, dict_topcells, data_fx_shuffle)
+        
+    return active_cells_decay_actual, active_cells_decay_norm, active_cells_decay_binary
+        
+    
+def compute_new_active_cells(t, nact, nfile, acts, dict_topcells):
+    active_cells_decay          = np.zeros((nact,nfile,len(t),len(t)))
+    active_cells_decay_norm     = np.zeros((nact,nfile,len(t),len(t)))
+    new_active_cells_id         = {act:{i:{} for i in range(nfile)} for act in acts}
+    new_active_cells_duration   = {act:{i:{} for i in range(nfile)} for act in acts}
+    for ax, act in enumerate(acts):
+        for fx in range(nfile):
+            _data_binary = dict_topcells[act]['data_binary'][fx].astype(bool)
+            _ncell = _data_binary.shape[0]
+            _active_cells_decay = np.zeros((len(t),len(t)))
+            _active_cells_decay_norm = np.zeros((len(t),len(t)))
+            _pre_active_cells = np.zeros(_ncell).astype(bool)
+            _new_active_cells_id = {i:[] for i in range(len(t))}
+            _new_active_cells_duration = {i:[] for i in range(len(t))}
+            for i in range(len(t)):
+                _active_cells_decay_at_t = np.zeros(len(t)-i)
+                _active_cells_decay_norm_at_t = np.zeros(len(t)-i)
+                _pre_active_cells      += _data_binary[:,i-1] if i > 0 else False # accumulate cells activated previously
+                _new_active_cells_at_i  = ~_pre_active_cells * _data_binary[:,i]
+                for jix, j in enumerate(np.arange(i,len(t))):
+                    #---- decay of all active cells at t
+                    _active_cells_decay_at_t[jix] = np.sum(_data_binary[:,i]*_data_binary[:,j]) / np.sum(_ncell)
+                    _active_cells_decay_norm_at_t[jix] = np.sum(_data_binary[:,i]*_data_binary[:,j]) / np.sum(_data_binary[:,i])
+                    # #---- decay of activated cell group at t 
+                    # _still_active_cells_at_j = _new_active_cells_at_i * _data_binary[:,j]
+                    # _active_cells_decay_at_t[jix]        = np.sum(_still_active_cells_at_j) / np.sum(_ncell)
+                    # _active_cells_decay_norm_at_t[jix]   = np.sum(_still_active_cells_at_j) / np.sum(_new_active_cells_at_i)            
+                # duration of each active neuron (on to off time)
+                _new_active_cells_id[i] = np.where(_new_active_cells_at_i)[0]
+                _new_active_cells_duration[i] = np.array([idx_active_off[0] if (idx_active_off := np.where(~row)[0]).size else len(row) for row in _data_binary[_new_active_cells_at_i,i:]])
+                # save the decay of active neurons at t
+                _active_cells_decay[i,i:] = _active_cells_decay_at_t
+                _active_cells_decay_norm[i,i:] = _active_cells_decay_norm_at_t
+            active_cells_decay[ax,fx]          = _active_cells_decay
+            active_cells_decay_norm[ax,fx]     = _active_cells_decay_norm
+            new_active_cells_id[act][fx]       = _new_active_cells_id
+            new_active_cells_duration[act][fx] = _new_active_cells_duration
+    return new_active_cells_id, new_active_cells_duration
+
+def compute_neuron_time_constant(nfile, act1, idx_amp, idx_taud, new_active_cells_id, new_active_cells_duration, fit_summary, modelfit):
+    klist = np.linspace(0.01,0.1,num=10)
+    dur_append = {i:[] for i in range(len(klist))}
+    eff_append = {i:[] for i in range(len(klist))}
+    for ix, k in enumerate(klist):
+        _dur_append = np.array([])
+        _eff_append = np.array([])
+        for fx in range(nfile):    
+            new_active_cells_id_fx       = new_active_cells_id[fx]
+            new_active_cells_duration_fx = new_active_cells_duration[fx]
+            nonoutlier                   = fit_summary['nonoutlier'][fx]
+            _amp                         = modelfit[f'sess{fx}'][act1]['par'][nonoutlier,:][:,idx_amp]
+            _taud                        = modelfit[f'sess{fx}'][act1]['par'][nonoutlier,:][:,idx_taud]    
+            for tix in range(24):
+                _cells_at_t    = new_active_cells_id_fx[tix]
+                _duration_at_t = new_active_cells_duration_fx[tix]
+                _amp_at_t      = _amp[_cells_at_t]
+                _taud_at_t     = _taud[_cells_at_t]
+                _eff_at_t      = -_taud_at_t * np.log(k/_amp_at_t)
+                _dur_append    = np.concatenate((_dur_append,_duration_at_t))
+                _eff_append    = np.concatenate((_eff_append,_eff_at_t))
+        dur_append[ix] = _dur_append
+        eff_append[ix] = _eff_append
+
+    eff_avg = {i:[] for i in range(len(klist))}
+    eff_sem = {i:[] for i in range(len(klist))}
+    eff_err = np.zeros(len(klist))
+    for ix in range(len(klist)):    
+        maxduration = np.max(dur_append[ix]).astype(int)
+        duration = np.arange(1,maxduration-3)
+        duration_in_sec = duration / 6
+        eff_avg[ix] = np.array([np.nanmean(eff_append[ix][dur_append[ix] == tix]) for tix in duration])
+        eff_sem[ix] = np.array([np.nanstd(eff_append[ix][dur_append[ix] == tix] / np.sqrt(np.sum(dur_append[ix] == tix))) for tix in duration])
+        eff_err[ix] = np.linalg.norm(duration_in_sec - eff_avg[ix])
+    return eff_avg, eff_sem, eff_err
+
