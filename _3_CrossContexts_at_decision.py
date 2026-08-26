@@ -11,7 +11,7 @@ from sklearn import linear_model
 from sklearn.decomposition import PCA
 import copy
 import importlib
-from utils import functions 
+from utils import functions, functions_xcontext
 
 
 # %%
@@ -52,8 +52,6 @@ lickleft     = 1
 nfile  = len(metadata)
 CD_dotproduct  = np.zeros(nfile)
 
-figpath = '/Users/kimchm/OneDrive - National Institutes of Health/NIH/research/ALM/code/figure/temp/'
-
 #%%
 #=======================#
 # Load the fitted model #
@@ -92,123 +90,224 @@ figpath = 'figure/neural_dynamics/cross_context/'
 datapath = 'data/CDdotproduct/'
 CDdotproduct = np.load(datapath + 'CDdotproduct.npy')
 
+keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
+keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
+keys3 = ['P1','A1','P2','A2']
+keys_within_context = ['P1-A1','P2-A2']
+keys_across_context = ['P2-P1','A2-A1']
+
 #%%
 
-dict_topcells_2 = {
-    'P2+A2-': np.array([]),
-    'P2+A2+': np.array([]),
-    'P2-A2+': np.array([])
-}
-dict_topcells_1x2_fx = {
-    'P1+A1-': copy.deepcopy(dict_topcells_2),
-    'P1+A1+': copy.deepcopy(dict_topcells_2),
-    'P1-A1+': copy.deepcopy(dict_topcells_2),
-}
-dict_topcells_1x2 = {fx:copy.deepcopy(dict_topcells_1x2_fx) for fx in range(nfile)}
+importlib.reload(functions_xcontext)
 
-tix_delay = np.arange(8,16)
-for fx in range(nfile):                
-    topcells_P1 = np.unique(np.concatenate([dict_topcells['P1']['topcells_at_t'][fx][i] for i in tix_delay]))
-    topcells_A1 = np.unique(np.concatenate([dict_topcells['A1']['topcells_at_t'][fx][i] for i in tix_delay]))
-    topcells_P2 = np.unique(np.concatenate([dict_topcells['P2']['topcells_at_t'][fx][i] for i in tix_delay]))
-    topcells_A2 = np.unique(np.concatenate([dict_topcells['A2']['topcells_at_t'][fx][i] for i in tix_delay]))
-    P1_A1 = topcells_P1[~np.isin(topcells_P1,topcells_A1)]
-    P1A1  = topcells_P1[ np.isin(topcells_P1,topcells_A1)]
-    A1_P1 = topcells_A1[~np.isin(topcells_A1,topcells_P1)]
-    P2_A2 = topcells_P2[~np.isin(topcells_P2,topcells_A2)]
-    P2A2  = topcells_P2[ np.isin(topcells_P2,topcells_A2)]
-    A2_P2 = topcells_A2[~np.isin(topcells_A2,topcells_P2)]
-    
-    dict_topcells_1x2[fx]['P1+A1-']['P2+A2-'] = P1_A1[np.isin(P1_A1,P2_A2)]
-    dict_topcells_1x2[fx]['P1+A1-']['P2+A2+'] = P1_A1[np.isin(P1_A1,P2A2)]
-    dict_topcells_1x2[fx]['P1+A1-']['P2-A2+'] = P1_A1[np.isin(P1_A1,A2_P2)]
-    dict_topcells_1x2[fx]['P1+A1+']['P2+A2-'] =  P1A1[np.isin(P1A1, P2_A2)]
-    dict_topcells_1x2[fx]['P1+A1+']['P2+A2+'] =  P1A1[np.isin(P1A1, P2A2)]
-    dict_topcells_1x2[fx]['P1+A1+']['P2-A2+'] =  P1A1[np.isin(P1A1, A2_P2)]
-    dict_topcells_1x2[fx]['P1-A1+']['P2+A2-'] = A1_P1[np.isin(A1_P1,P2_A2)]
-    dict_topcells_1x2[fx]['P1-A1+']['P2+A2+'] = A1_P1[np.isin(A1_P1,P2A2)]
-    dict_topcells_1x2[fx]['P1-A1+']['P2-A2+'] = A1_P1[np.isin(A1_P1,A2_P2)]
+#%%
+
+tix_delay_range = np.arange(8,16)
+
+dict_topcells_1x2 = functions_xcontext.create_dict_topcells_1x2(nfile, dict_topcells, tix_delay_range)
+
+dict_CDdp, CDdp, CDdp_1x2 = functions_xcontext.create_dict_CDdotprod(nfile, dict_topcells, dict_topcells_1x2, tix_delay_range, fit_summary, modelfit)
+
+dict_CDdp_err = functions_xcontext.create_dict_CDdotprod_err(nfile, dict_CDdp, CDdp)
+
+dict_module_activity = functions_xcontext.create_dict_module_activity(nfile, dict_topcells_1x2, fit_summary, modelfit, keys1, keys2)
+
+dict_normalized_activity = functions_xcontext.create_dict_normalized_activity(nfile, dict_module_activity, keys1, keys2, keys3)
+
+sequential_P1, sequential_A1, sequential_P2, sequential_A2 = functions_xcontext.create_sequential_activity(nfile, dict_topcells_1x2, dict_topcells, fit_summary, modelfit, keys1, keys2)
+
+dict_within_selectivity = functions_xcontext.create_dict_within_selectivity(nfile, dict_normalized_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
+dict_across_activity    = functions_xcontext.create_dict_across_activity(nfile, dict_normalized_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
 
 
-CDdp = np.zeros(nfile)
-CDdp_1x2 = np.zeros(nfile)
-dict_CDdp = copy.deepcopy(dict_topcells_1x2)
+
+#%%
+
+fx = 10
+tx = 14
+sum = 0
+for k1 in keys1:
+    for k2 in keys2:
+       sum += dict_normalized_activity[k1][k2]['P1'][fx,tx]
+
+print(sum)
+
+#%%
+#--------------#
+# module size #
+#--------------#
+bar_width = 0.6
+titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
+labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
+
+fig = plt.figure(figsize=(6, 6))
+gs = fig.add_gridspec(
+    3, 3,
+    hspace=0.5,   # small spacing overall
+    wspace=1
+)
+for i2, key2 in enumerate(keys2):
+    for i1, key1 in enumerate(keys1):
+
+        frac_cells = np.zeros(nfile)
+        for fx in range(nfile):
+            nonoutlier = fit_summary['nonoutlier'][fx]
+            ntotal_cells = len(nonoutlier)
+            frac_cells[fx] = len(dict_topcells_1x2[fx][key1][key2]) / ntotal_cells        
+        frac_cells_mean = np.mean(frac_cells)
+        frac_cells_std  = np.std(frac_cells)
+        
+        ax1 = fig.add_subplot(gs[i2, i1])
+        # Bar: mean
+        plt.bar(
+            0,
+            frac_cells_mean,
+            width=bar_width,
+            color='gray',
+            alpha=0.5
+        )
+        # Scatter with horizontal jitter
+        jitter = 0.1 * (2 * np.random.rand(len(frac_cells)) - 1)
+        plt.scatter(
+            0 + jitter,
+            frac_cells,
+            s=12,
+            facecolors='none',
+            edgecolors='gray',
+            linewidths=0.5,
+            alpha=1
+        )    
+        # Error bar (SEM)
+        plt.errorbar(
+            0,
+            frac_cells_mean,
+            yerr = frac_cells_std / np.sqrt(len(frac_cells)),
+            color='k',
+            capsize=8,
+            lw=1.5,
+            linestyle='none'
+        )
+        plt.xlim([-0.5,0.5])
+        plt.ylim([0.0,0.13])
+        # Titles
+        if i2 == 0:
+            ax1.set_title(titles1[i1], fontsize=12)
+        # Row labels
+        if i1 == 0:
+            ax1.set_ylabel(labels2[i2], fontsize=12)            
+        ax1.set_xticks([-0.5,0,0.5])
+        ax1.set_xticklabels([])
+        plt.gca().spines[['top', 'right']].set_visible(False)            
+plt.tight_layout()
+plt.savefig(figpath + 'module_sizes.pdf')
+
+
+
+total_frac_cells = np.zeros(nfile)
+total_number_cells = np.zeros(nfile)
 for fx in range(nfile):
-    # topcells
-    topcells_P1 = np.unique(np.concatenate([dict_topcells['P1']['topcells_at_t'][fx][i] for i in tix_delay]))
-    topcells_A1 = np.unique(np.concatenate([dict_topcells['A1']['topcells_at_t'][fx][i] for i in tix_delay]))
-    topcells_P2 = np.unique(np.concatenate([dict_topcells['P2']['topcells_at_t'][fx][i] for i in tix_delay]))
-    topcells_A2 = np.unique(np.concatenate([dict_topcells['A2']['topcells_at_t'][fx][i] for i in tix_delay]))
+    nonoutlier   = fit_summary['nonoutlier'][fx]
+    ntotal_cells = len(nonoutlier)
+    for i2, key2 in enumerate(keys2):
+        for i1, key1 in enumerate(keys1):
+            total_frac_cells[fx] += len(dict_topcells_1x2[fx][key1][key2]) / ntotal_cells
+            total_number_cells[fx] += len(dict_topcells_1x2[fx][key1][key2])
+total_frac_cells_mean, total_frac_cells_std = np.mean(total_frac_cells), np.std(total_frac_cells)
+total_number_cells_mean, total_number_cells_std = np.mean(total_number_cells), np.std(total_number_cells)
+        
+        
+plt.figure(figsize=(2,2))        
+# Bar: mean
+plt.bar(
+    0,
+    total_frac_cells_mean,
+    width=bar_width,
+    color='gray',
+    alpha=0.5
+)
+# Scatter with horizontal jitter
+jitter = 0.1 * (2 * np.random.rand(nfile) - 1)
+plt.scatter(
+    0 + jitter,
+    total_frac_cells,
+    s=12,
+    facecolors='none',
+    edgecolors='gray',
+    linewidths=0.5,
+    alpha=1
+)    
+# Error bar (SEM)
+plt.errorbar(
+    0,
+    total_frac_cells_mean,
+    yerr = total_frac_cells_std / np.sqrt(nfile),
+    color='k',
+    capsize=8,
+    lw=1.5,
+    linestyle='none'
+)
+plt.xticks([-0.5,0,0.5],[])
+plt.gca().spines[['top', 'right']].set_visible(False)
+plt.ylabel('frac of neurons')
+plt.tight_layout()
+plt.savefig(figpath + 'module_sizes_total_frac.pdf')
 
-    # shared & nonshared topcells
-    topcells_1 = np.unique(np.concatenate((topcells_P1,topcells_A1)))
-    topcells_2 = np.unique(np.concatenate((topcells_P2,topcells_A2)))
-    topcells_1x2 = topcells_1[np.isin(topcells_1,topcells_2)]
-    
-    # compute CD1, CD2
-    nonoutlier = fit_summary['nonoutlier'][fx]
-    data_P1   = modelfit[f'sess{fx}']['P1']['data'][nonoutlier,:]
-    data_A1   = modelfit[f'sess{fx}']['A1']['data'][nonoutlier,:]
-    data_P2   = modelfit[f'sess{fx}']['P2']['data'][nonoutlier,:]
-    data_A2   = modelfit[f'sess{fx}']['A2']['data'][nonoutlier,:]
-    diff1 = np.mean((data_P1 - data_A1)[:,12:16],axis=1)
-    diff2 = np.mean((data_P2 - data_A2)[:,12:16],axis=1)
-    CD1 = diff1 / np.linalg.norm(diff1)
-    CD2 = diff2 / np.linalg.norm(diff2)
-    
-    # approximate CD1CD2
-    CDdp[fx] = np.inner(CD1,CD2)
-    CDdp_1x2[fx] = np.inner(CD1[topcells_1x2],CD2[topcells_1x2])
-    
-    # Divide CD1CD2 into components
-    dict_CDdp[fx]['P1+A1-']['P2+A2-'] = np.sum((CD1*CD2)[dict_topcells_1x2[fx]['P1+A1-']['P2+A2-']])
-    dict_CDdp[fx]['P1+A1-']['P2+A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2[fx]['P1+A1-']['P2+A2+']])
-    dict_CDdp[fx]['P1+A1-']['P2-A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2[fx]['P1+A1-']['P2-A2+']])
-    dict_CDdp[fx]['P1+A1+']['P2+A2-'] = np.sum((CD1*CD2)[dict_topcells_1x2[fx]['P1+A1+']['P2+A2-']])
-    dict_CDdp[fx]['P1+A1+']['P2+A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2[fx]['P1+A1+']['P2+A2+']])
-    dict_CDdp[fx]['P1+A1+']['P2-A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2[fx]['P1+A1+']['P2-A2+']])
-    dict_CDdp[fx]['P1-A1+']['P2+A2-'] = np.sum((CD1*CD2)[dict_topcells_1x2[fx]['P1-A1+']['P2+A2-']])
-    dict_CDdp[fx]['P1-A1+']['P2+A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2[fx]['P1-A1+']['P2+A2+']])
-    dict_CDdp[fx]['P1-A1+']['P2-A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2[fx]['P1-A1+']['P2-A2+']])
 
-dict_CDdp_err = {
-    'P1+A1-':np.zeros(nfile),
-    'P1+A1+':np.zeros(nfile),
-    'P1-A1+':np.zeros(nfile),
-    'P1+A1-_P1+A1+':np.zeros(nfile),
-    'P1-A1+_P1+A1+':np.zeros(nfile),
-    'P1+A1-_P1-A1+':np.zeros(nfile),
-    'all':np.zeros(nfile),
-    'P2+A2-':np.zeros(nfile),
-    'P2+A2+':np.zeros(nfile),
-    'P2-A2+':np.zeros(nfile),    
-    'P2+A2-_P2+A2+':np.zeros(nfile),
-    'P2-A2+_P2+A2+':np.zeros(nfile),
-    'P2+A2-_P2-A2+':np.zeros(nfile)    
-}
-for fx in range(nfile):
-    dict_CDdp_err['P1+A1-'][fx] = np.abs(dict_CDdp[fx]['P1+A1-']['P2+A2-'] + dict_CDdp[fx]['P1+A1-']['P2+A2+'] + dict_CDdp[fx]['P1+A1-']['P2-A2+'] - CDdp[fx])
-    dict_CDdp_err['P1+A1+'][fx] = np.abs(dict_CDdp[fx]['P1+A1+']['P2+A2-'] + dict_CDdp[fx]['P1+A1+']['P2+A2+'] + dict_CDdp[fx]['P1+A1+']['P2-A2+'] - CDdp[fx])
-    dict_CDdp_err['P1-A1+'][fx] = np.abs(dict_CDdp[fx]['P1-A1+']['P2+A2-'] + dict_CDdp[fx]['P1-A1+']['P2+A2+'] + dict_CDdp[fx]['P1-A1+']['P2-A2+'] - CDdp[fx])
-    dict_CDdp_err['P1+A1-_P1+A1+'][fx] = np.abs(dict_CDdp[fx]['P1+A1-']['P2+A2-'] + dict_CDdp[fx]['P1+A1-']['P2+A2+'] + dict_CDdp[fx]['P1+A1-']['P2-A2+'] + \
-                                                dict_CDdp[fx]['P1+A1+']['P2+A2-'] + dict_CDdp[fx]['P1+A1+']['P2+A2+'] + dict_CDdp[fx]['P1+A1+']['P2-A2+'] - CDdp[fx])
-    dict_CDdp_err['P1+A1-_P1-A1+'][fx] = np.abs(dict_CDdp[fx]['P1+A1-']['P2+A2-'] + dict_CDdp[fx]['P1+A1-']['P2+A2+'] + dict_CDdp[fx]['P1+A1-']['P2-A2+'] + \
-                                                dict_CDdp[fx]['P1-A1+']['P2+A2-'] + dict_CDdp[fx]['P1-A1+']['P2+A2+'] + dict_CDdp[fx]['P1-A1+']['P2-A2+'] - CDdp[fx])
-    dict_CDdp_err['P1-A1+_P1+A1+'][fx] = np.abs(dict_CDdp[fx]['P1-A1+']['P2+A2-'] + dict_CDdp[fx]['P1-A1+']['P2+A2+'] + dict_CDdp[fx]['P1-A1+']['P2-A2+'] + \
-                                                dict_CDdp[fx]['P1+A1+']['P2+A2-'] + dict_CDdp[fx]['P1+A1+']['P2+A2+'] + dict_CDdp[fx]['P1+A1+']['P2-A2+'] - CDdp[fx])    
-    dict_CDdp_err['all'][fx]           = np.abs(dict_CDdp[fx]['P1+A1-']['P2+A2-'] + dict_CDdp[fx]['P1+A1-']['P2+A2+'] + dict_CDdp[fx]['P1+A1-']['P2-A2+'] + \
-                                                dict_CDdp[fx]['P1+A1+']['P2+A2-'] + dict_CDdp[fx]['P1+A1+']['P2+A2+'] + dict_CDdp[fx]['P1+A1+']['P2-A2+'] + \
-                                                dict_CDdp[fx]['P1-A1+']['P2+A2-'] + dict_CDdp[fx]['P1-A1+']['P2+A2+'] + dict_CDdp[fx]['P1-A1+']['P2-A2+'] - CDdp[fx])
 
-    dict_CDdp_err['P2+A2-'][fx] = np.abs(dict_CDdp[fx]['P1-A1+']['P2+A2-'] + dict_CDdp[fx]['P1+A1+']['P2+A2-'] - CDdp[fx])
-    dict_CDdp_err['P2+A2+'][fx] = np.abs(dict_CDdp[fx]['P1-A1+']['P2+A2+'] + dict_CDdp[fx]['P1+A1+']['P2+A2+'] - CDdp[fx])
-    dict_CDdp_err['P2-A2+'][fx] = np.abs(dict_CDdp[fx]['P1-A1+']['P2-A2+'] + dict_CDdp[fx]['P1+A1+']['P2-A2+'] - CDdp[fx])
-    dict_CDdp_err['P2+A2-_P2+A2+'][fx] = np.abs(dict_CDdp[fx]['P1-A1+']['P2+A2-'] + dict_CDdp[fx]['P1+A1+']['P2+A2-'] + \
-                                                dict_CDdp[fx]['P1-A1+']['P2+A2+'] + dict_CDdp[fx]['P1+A1+']['P2+A2+'] - CDdp[fx])
-    dict_CDdp_err['P2-A2+_P2+A2+'][fx] = np.abs(dict_CDdp[fx]['P1-A1+']['P2-A2+'] + dict_CDdp[fx]['P1+A1+']['P2-A2+'] + \
-                                                dict_CDdp[fx]['P1-A1+']['P2+A2+'] + dict_CDdp[fx]['P1+A1+']['P2+A2+'] - CDdp[fx])
-    dict_CDdp_err['P2+A2-_P2-A2+'][fx] = np.abs(dict_CDdp[fx]['P1-A1+']['P2+A2-'] + dict_CDdp[fx]['P1+A1+']['P2+A2-'] + \
-                                                dict_CDdp[fx]['P1-A1+']['P2-A2+'] + dict_CDdp[fx]['P1+A1+']['P2-A2+'] - CDdp[fx])
+
+plt.figure(figsize=(2,2))        
+# Bar: mean
+plt.bar(
+    0,
+    total_number_cells_mean,
+    width=bar_width,
+    color='gray',
+    alpha=0.5
+)
+# Scatter with horizontal jitter
+jitter = 0.1 * (2 * np.random.rand(nfile) - 1)
+plt.scatter(
+    0 + jitter,
+    total_number_cells,
+    s=12,
+    facecolors='none',
+    edgecolors='gray',
+    linewidths=0.5,
+    alpha=1
+)    
+# Error bar (SEM)
+plt.errorbar(
+    0,
+    total_number_cells_mean,
+    yerr = total_number_cells_std / np.sqrt(nfile),
+    color='k',
+    capsize=8,
+    lw=1.5,
+    linestyle='none'
+)
+plt.xticks([-0.5,0,0.5],[])
+plt.yticks([0,100,200,300,400,500])
+plt.gca().spines[['top', 'right']].set_visible(False)
+plt.ylabel('# of neurons')
+plt.tight_layout()
+plt.savefig(figpath + 'module_sizes_total_number.pdf')
+
+
+
+_cor = np.corrcoef(CDdotproduct, total_number_cells)[0,1]
+plt.figure(figsize=(2,2))
+plt.scatter(CDdotproduct, total_number_cells, fc='None', ec='k')
+plt.xlabel('CD dot product')
+plt.ylabel('# of neurons')
+plt.gca().spines[['top','right']].set_visible(False)
+plt.title('corr ' + str(np.round(_cor,decimals=3)))
+plt.tight_layout()
+plt.savefig(figpath + 'module_sizes_vs_CDdotprod.pdf')
+
+#%%
+#-----------------------------------#
+# approximation of CD dot product
+#-----------------------------------#
 
 plt.figure(figsize=(8, 4))
 keys = list(dict_CDdp_err.keys())
@@ -267,45 +366,12 @@ for i, key in enumerate(keys):
 plt.xticks(x, xlabels, rotation=45, ha='right')
 plt.ylabel(r'$\Delta$ CD dot product')
 plt.tight_layout()
-plt.savefig(figpath + 'CDdp_error.pdf')
+plt.savefig(figpath + 'CDdotprod_error.pdf')
 
 #%%
-dict_trialtypes = {
-    'P1': np.zeros((nfile,24)),
-    'A1': np.zeros((nfile,24)),
-    'P2': np.zeros((nfile,24)),
-    'A2': np.zeros((nfile,24))
-}
-dict_topcells_2 = {
-    'P2+A2-': copy.deepcopy(dict_trialtypes),
-    'P2+A2+': copy.deepcopy(dict_trialtypes),
-    'P2-A2+': copy.deepcopy(dict_trialtypes)
-}
-dict_population_activity = {
-    'P1+A1-': copy.deepcopy(dict_topcells_2),
-    'P1+A1+': copy.deepcopy(dict_topcells_2),
-    'P1-A1+': copy.deepcopy(dict_topcells_2),
-}
-
-for fx in range(nfile):
-    nonoutlier = fit_summary['nonoutlier'][fx]
-    data_P1   = modelfit[f'sess{fx}']['P1']['data'][nonoutlier,:]
-    data_A1   = modelfit[f'sess{fx}']['A1']['data'][nonoutlier,:]
-    data_P2   = modelfit[f'sess{fx}']['P2']['data'][nonoutlier,:]
-    data_A2   = modelfit[f'sess{fx}']['A2']['data'][nonoutlier,:]
-
-    for key1 in ['P1+A1-', 'P1+A1+', 'P1-A1+']:
-        for key2 in ['P2+A2-', 'P2+A2+', 'P2-A2+']:
-            _topcells = dict_topcells_1x2[fx][key1][key2]
-            _P1 = np.mean(data_P1[_topcells],axis=0)
-            _A1 = np.mean(data_A1[_topcells],axis=0)
-            _P2 = np.mean(data_P2[_topcells],axis=0)
-            _A2 = np.mean(data_A2[_topcells],axis=0)
-            dict_population_activity[key1][key2]['P1'][fx] = _P1
-            dict_population_activity[key1][key2]['A1'][fx] = _A1
-            dict_population_activity[key1][key2]['P2'][fx] = _P2
-            dict_population_activity[key1][key2]['A2'][fx] = _A2
-
+#-----------------------------------#
+# neural activity of modules
+#-----------------------------------#
 
 fig = plt.figure(figsize=(6, 8))
 gs = fig.add_gridspec(
@@ -313,8 +379,6 @@ gs = fig.add_gridspec(
     hspace=0.3,   # small spacing overall
     wspace=0.5
 )
-keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
-keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
 titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
 labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
 for i2, key2 in enumerate(keys2):
@@ -322,11 +386,11 @@ for i2, key2 in enumerate(keys2):
         # top: context 1
         ax1 = fig.add_subplot(gs[2*i2, i1])
         ax1.plot(
-            np.nanmean(dict_population_activity[key1][key2]['P1'], axis=0),
+            np.nanmean(dict_module_activity[key1][key2]['P1'], axis=0),
             c='purple'
         )
         ax1.plot(
-            np.nanmean(dict_population_activity[key1][key2]['A1'], axis=0),
+            np.nanmean(dict_module_activity[key1][key2]['A1'], axis=0),
             c='limegreen'
         )
         ax1.axvline(7, color='gray', linestyle='--')
@@ -337,12 +401,12 @@ for i2, key2 in enumerate(keys2):
         # bottom: context 2
         ax2 = fig.add_subplot(gs[2*i2 + 1, i1], sharex=ax1)
         ax2.plot(
-            np.nanmean(dict_population_activity[key1][key2]['P2'], axis=0),
+            np.nanmean(dict_module_activity[key1][key2]['P2'], axis=0),
             c='purple',
             linestyle='--'
         )
         ax2.plot(
-            np.nanmean(dict_population_activity[key1][key2]['A2'], axis=0),
+            np.nanmean(dict_module_activity[key1][key2]['A2'], axis=0),
             c='limegreen',
             linestyle='--'
         )
@@ -361,11 +425,10 @@ for i2, key2 in enumerate(keys2):
             ax1.annotate('Context1', xy=(0.45,0.8), xycoords='axes fraction')
             ax2.annotate('Context2', xy=(0.45,0.8), xycoords='axes fraction')
 plt.tight_layout()
-plt.savefig(figpath + 'neuron_group_traces.pdf')
+# plt.savefig(figpath + 'neuron_group_traces.pdf')
 
 
 
-tix_delay = np.arange(8,16)
 fig = plt.figure(figsize=(6, 6))
 gs = fig.add_gridspec(
     3, 3,
@@ -373,18 +436,12 @@ gs = fig.add_gridspec(
     wspace=0.5
 )
 bar_width = 0.6
-keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
-keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
 titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
 labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
 for i2, key2 in enumerate(keys2):
-    print('key2', key2)
-    for i1, key1 in enumerate(keys1):
-        # top: context 1
-        print('key1', key1)
-        
-        diff1 = np.nanmean(dict_population_activity[key1][key2]['P1'][:,tix_delay] - dict_population_activity[key1][key2]['A1'][:,tix_delay], axis=1)
-        diff2 = np.nanmean(dict_population_activity[key1][key2]['P2'][:,tix_delay] - dict_population_activity[key1][key2]['A2'][:,tix_delay], axis=1)
+    for i1, key1 in enumerate(keys1):        
+        diff1 = np.nanmean(dict_normalized_activity[key1][key2]['P1'][:,tix_delay_range] - dict_normalized_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
+        diff2 = np.nanmean(dict_normalized_activity[key1][key2]['P2'][:,tix_delay_range] - dict_normalized_activity[key1][key2]['A2'][:,tix_delay_range], axis=1)
         diff1_mean = np.nanmean(diff1)
         diff2_mean = np.nanmean(diff2)        
         diff1_std  = np.nanstd(diff1)
@@ -440,8 +497,6 @@ for i2, key2 in enumerate(keys2):
             lw=1.5,
             linestyle='none'
         )
-        # plt.axvspan(-0.5,0.5,color='gray',alpha=0.3)
-        # plt.axvspan(0.5,1.5,color='tab:cyan',alpha=0.3)
         plt.xlim([-0.5,1.5])
         plt.ylim([-0.3,0.3])
         # Titles
@@ -457,12 +512,11 @@ for i2, key2 in enumerate(keys2):
             ax1.set_xticks([0,1])
             ax1.set_xticklabels([])
 plt.tight_layout()
-plt.savefig(figpath + 'neuron_group_individuals_within_context.pdf')
+# plt.savefig(figpath + 'neuron_group_individuals_within_context.pdf')
 
 
 
 
-tix_delay = np.arange(8,16)
 fig = plt.figure(figsize=(6, 6))
 gs = fig.add_gridspec(
     3, 3,
@@ -475,13 +529,13 @@ keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
 titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
 labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
 for i2, key2 in enumerate(keys2):
-    print('key2', key2)
+    # print('key2', key2)
     for i1, key1 in enumerate(keys1):
         # top: context 1
-        print('key1', key1)
+        # print('key1', key1)
         
-        diff1 = np.nanmean(dict_population_activity[key1][key2]['P2'][:,tix_delay] - dict_population_activity[key1][key2]['P1'][:,tix_delay], axis=1)
-        diff2 = np.nanmean(dict_population_activity[key1][key2]['A2'][:,tix_delay] - dict_population_activity[key1][key2]['A1'][:,tix_delay], axis=1)
+        diff1 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_delay_range] - dict_module_activity[key1][key2]['P1'][:,tix_delay_range], axis=1)
+        diff2 = np.nanmean(dict_module_activity[key1][key2]['A2'][:,tix_delay_range] - dict_module_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
         diff1_mean = np.nanmean(diff1)
         diff2_mean = np.nanmean(diff2)        
         diff1_std  = np.nanstd(diff1)
@@ -537,8 +591,6 @@ for i2, key2 in enumerate(keys2):
             lw=1.5,
             linestyle='none'
         )
-        # plt.axvspan(-0.5,0.5,color='purple',alpha=0.2)
-        # plt.axvspan(0.5,1.5,color='limegreen',alpha=0.2)
         plt.xlim([-0.5,1.5])
         plt.ylim([-0.3,0.3])
         # Titles
@@ -558,7 +610,220 @@ plt.savefig(figpath + 'neuron_group_individuals_cross_context.pdf')
 
 
 
+
 #%%
+#-----------------------------------#
+# sequential activity of modules
+#-----------------------------------#
+
+for i1, k1 in enumerate(keys1):
+    for i2, k2 in enumerate(keys2):        
+        
+        sequential_P1_i2_i1 = sequential_P1[i2,i1]
+        sequential_A1_i2_i1 = sequential_A1[i2,i1]
+        sequential_P2_i2_i1 = sequential_P2[i2,i1]
+        sequential_A2_i2_i1 = sequential_A2[i2,i1]
+        
+        vmax = np.max([np.max(sequential_P1_i2_i1),np.max(sequential_A1_i2_i1),np.max(sequential_P2_i2_i1),np.max(sequential_A2_i2_i1)])
+
+        plt.figure(figsize=(4.3,3.8))    
+        plt.subplot(221)
+        plt.title(r'$P_1$',fontsize=12)
+        plt.imshow(sequential_P1_i2_i1,cmap='jet',aspect='auto',vmin=0,vmax=vmax)
+        plt.axvline(7,color='w',linestyle='--')
+        plt.axvline(15,color='w',linestyle='--')
+        plt.colorbar()
+        plt.subplot(222)
+        plt.title(r'$A_1$',fontsize=12)
+        plt.imshow(sequential_A1_i2_i1,cmap='jet',aspect='auto',vmin=0,vmax=vmax)
+        plt.axvline(7,color='w',linestyle='--')
+        plt.axvline(15,color='w',linestyle='--')
+        plt.colorbar()
+        plt.subplot(223)
+        plt.title(r'$P_2$',fontsize=12)
+        plt.imshow(sequential_P2_i2_i1,cmap='jet',aspect='auto',vmin=0,vmax=vmax)
+        plt.axvline(7,color='w',linestyle='--')
+        plt.axvline(15,color='w',linestyle='--')
+        plt.colorbar()
+        plt.subplot(224)
+        plt.title(r'$A_2$',fontsize=12)
+        plt.imshow(sequential_A2_i2_i1,cmap='jet',aspect='auto',vmin=0,vmax=vmax)
+        plt.axvline(7,color='w',linestyle='--')
+        plt.axvline(15,color='w',linestyle='--')
+        plt.colorbar()
+        plt.tight_layout()
+        # plt.savefig(figpath + f'sequential/map_{i2}_{i1}_' + k2 + '_' + k1 + '.pdf')
+        
+
+        cmap = plt.cm.copper
+        colors = cmap(np.linspace(0, 1, 8))        
+        plt.figure(figsize=(3.3,3))
+        plt.subplot(221)
+        plt.title(r'$P_1$',fontsize=12)
+        for i in range(8):
+            plt.plot(sequential_P1_i2_i1[i], color=colors[i])
+        plt.axvline(7,color='gray',linestyle='--')
+        plt.axvline(15,color='gray',linestyle='--')
+        plt.ylim([0,vmax])
+        plt.gca().spines[['top', 'right']].set_visible(False)
+        plt.subplot(222)
+        plt.title(r'$A_1$',fontsize=12)
+        for i in range(8):
+            plt.plot(sequential_A1_i2_i1[i], color=colors[i])
+        plt.axvline(7,color='gray',linestyle='--')
+        plt.axvline(15,color='gray',linestyle='--')
+        plt.gca().spines[['top', 'right']].set_visible(False)
+        plt.ylim([0,vmax])
+        plt.subplot(223)
+        plt.title(r'$P_2$',fontsize=12)
+        for i in range(8):
+            plt.plot(sequential_P2_i2_i1[i], color=colors[i])
+        plt.axvline(7,color='gray',linestyle='--')
+        plt.axvline(15,color='gray',linestyle='--')
+        plt.gca().spines[['top', 'right']].set_visible(False)
+        plt.ylim([0,vmax])
+        plt.subplot(224)
+        plt.title(r'$A_2$',fontsize=12)
+        for i in range(8):
+            plt.plot(sequential_A2_i2_i1[i], color=colors[i])
+        plt.axvline(7,color='gray',linestyle='--')
+        plt.axvline(15,color='gray',linestyle='--')
+        plt.gca().spines[['top', 'right']].set_visible(False)
+        plt.ylim([0,vmax])
+        plt.tight_layout()
+        # plt.savefig(figpath + f'sequential/trace_{i2}_{i1}_' + k2 + '_' + k1 + '.pdf')
+
+#%%
+#-----------------------------------#
+# CD dot product vs module activity
+#-----------------------------------#
+
+
+
+fig = plt.figure(figsize=(10, 6))
+
+# 3 x 3 groups
+outer = fig.add_gridspec(3, 3, wspace=0.35, hspace=0.4)
+
+for i1, k1 in enumerate(keys1):
+    for i2, k2 in enumerate(keys2):
+
+        # two contexts placed close together
+        inner = outer[i2, i1].subgridspec(1, 2, wspace=0.08)
+
+        y1 = dict_within_selectivity[k1][k2]['P1-A1']
+        y2 = dict_within_selectivity[k1][k2]['P2-A2']
+
+        # common y range for direct comparison
+        ymin = np.nanmin([np.nanmin(y1), np.nanmin(y2)]) - 0.05
+        ymax = np.nanmax([np.nanmax(y1), np.nanmax(y2)]) + 0.05
+
+        for ic, kc in enumerate(keys_within_context):
+
+            ax = fig.add_subplot(inner[0, ic])
+            ax.spines[['top', 'right']].set_visible(False)
+            y = dict_within_selectivity[k1][k2][kc]
+            ax.axhline(0,color='gray',linestyle='--')
+            ax.scatter(
+                CDdotproduct,
+                y,
+                facecolor='none',
+                edgecolors='k'
+            )
+            _cor = np.corrcoef(CDdotproduct, y)[0, 1]
+            ax.set_ylim([ymin, ymax])            
+            if ic == 0:
+                ax.set_title(
+                    r'$r=$' + str(np.round(_cor, 3)),
+                    fontsize=9
+                )
+
+                None
+            else:
+                ax.set_title(
+                    r'$r=$' + str(np.round(_cor, 3)),
+                    fontsize=9
+                )
+                ax.set_yticklabels([])
+
+fig.tight_layout()
+plt.savefig(figpath + 'CDdotprod_with_context.pdf')
+
+
+
+####### CD dot product: across context ########
+
+fig = plt.figure(figsize=(10, 6))
+
+# 3 x 3 groups
+outer = fig.add_gridspec(3, 3, wspace=0.35, hspace=0.4)
+
+for i1, k1 in enumerate(keys1):
+    for i2, k2 in enumerate(keys2):
+
+        # two contexts placed close together
+        inner = outer[i2, i1].subgridspec(1, 2, wspace=0.08)
+
+        y1 = dict_across_activity[k1][k2]['P2-P1']
+        y2 = dict_across_activity[k1][k2]['A2-A1']
+
+        # common y range for direct comparison
+        ymin = np.nanmin([np.nanmin(y1), np.nanmin(y2)]) - 0.05
+        ymax = np.nanmax([np.nanmax(y1), np.nanmax(y2)]) + 0.05
+
+        for ic, kc in enumerate(keys_across_context):
+
+            ax = fig.add_subplot(inner[0, ic])
+            ax.spines[['top', 'right']].set_visible(False)
+            y = dict_across_activity[k1][k2][kc]
+            ax.axhline(0,color='gray',linestyle='--')
+            ax.scatter(
+                CDdotproduct,
+                y,
+                facecolor='none',
+                edgecolors='k'
+            )
+
+            _cor = np.corrcoef(CDdotproduct, y)[0, 1]
+
+            ax.set_ylim([ymin, ymax])
+            
+
+            if ic == 0:
+                ax.set_title(
+                    r'$r=$' + str(np.round(_cor, 3)),
+                    fontsize=9
+                )
+                None
+            else:
+                ax.set_title(
+                    r'$r=$' + str(np.round(_cor, 3)),
+                    fontsize=9
+                )
+
+                # remove duplicate y labels/ticks
+                ax.set_yticklabels([])
+
+fig.tight_layout()
+plt.savefig(figpath + 'CDdotprod_across_context.pdf')
+
+
+
+
+
+
+
+
+
+
+#---------------- below is optional --------------------#
+
+
+
+#%%
+#---------------------------------------------
+# neuron counts (context 1 vs context 2)
+#---------------------------------------------
 
 tix_context1 = np.arange(8,16)
 tix_context2 = np.arange(8,16)
@@ -660,7 +925,7 @@ plt.gca().invert_yaxis()
 plt.colorbar()
 plt.ylabel(r'$P_2^-A_2^+$',fontsize=12)
 plt.tight_layout()
-plt.savefig(figpath + 'P1+_A1-.pdf')
+# plt.savefig(figpath + 'P1+_A1-.pdf')
 
 
 idline = np.arange(8)
@@ -685,7 +950,7 @@ plt.gca().invert_yaxis()
 plt.colorbar()
 plt.ylabel(r'$P_2^-A_2^+$',fontsize=12)
 plt.tight_layout()
-plt.savefig(figpath + 'P1-_A1+.pdf')
+# plt.savefig(figpath + 'P1-_A1+.pdf')
 
 
 
@@ -711,7 +976,7 @@ plt.gca().invert_yaxis()
 plt.colorbar()
 plt.ylabel(r'$P_2^-A_2^+$', fontsize=12)
 plt.tight_layout()
-plt.savefig(figpath + 'P1+_A1+.pdf')
+# plt.savefig(figpath + 'P1+_A1+.pdf')
 
 
 #%%
@@ -763,7 +1028,7 @@ plt.plot(act3_context2)
 plt.gca().spines[['top', 'right']].set_visible(False)
 plt.xlabel('time',fontsize=12)
 plt.tight_layout()
-plt.savefig(figpath + 'P1+_A1-_hist.pdf')
+# plt.savefig(figpath + 'P1+_A1-_hist.pdf')
 
 
 fig = plt.figure(figsize=(2.3, 9))
@@ -791,7 +1056,7 @@ plt.plot(act6_context2)
 plt.gca().spines[['top', 'right']].set_visible(False)
 plt.xlabel('time',fontsize=12)
 plt.tight_layout()
-plt.savefig(figpath + 'P1-_A1+_hist.pdf')
+# plt.savefig(figpath + 'P1-_A1+_hist.pdf')
 
 
 
@@ -821,437 +1086,48 @@ plt.plot(act9_context2)
 plt.gca().spines[['top', 'right']].set_visible(False)
 plt.xlabel('time',fontsize=12)
 plt.tight_layout()
-plt.savefig(figpath + 'P1+_A1+_hist.pdf')
-
-
-#%%
-
-keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
-keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
-popact_P1 = np.zeros((nfile,3,3,8,24))
-popact_A1 = np.zeros((nfile,3,3,8,24))
-popact_P2 = np.zeros((nfile,3,3,8,24))
-popact_A2 = np.zeros((nfile,3,3,8,24))
-
-for i1, k1 in enumerate(keys1):
-    for i2, k2 in enumerate(keys2):        
-        for fx in range(nfile):
-            _cells = dict_topcells_1x2[fx][k1][k2]
-            nonoutlier = fit_summary['nonoutlier'][fx]
-            data_P1   = modelfit[f'sess{fx}']['P1']['data'][nonoutlier,:]
-            data_A1   = modelfit[f'sess{fx}']['A1']['data'][nonoutlier,:]
-            data_P2   = modelfit[f'sess{fx}']['P2']['data'][nonoutlier,:]
-            data_A2   = modelfit[f'sess{fx}']['A2']['data'][nonoutlier,:]
-            for ix, tx in enumerate(tix_context1):
-                _cells_P1_tx = _cells[np.isin(_cells,dict_topcells['P1']['topcells_at_t'][fx][tx])]
-                _cells_A1_tx = _cells[np.isin(_cells,dict_topcells['A1']['topcells_at_t'][fx][tx])]
-                _cells_P2_tx = _cells[np.isin(_cells,dict_topcells['P2']['topcells_at_t'][fx][tx])]
-                _cells_A2_tx = _cells[np.isin(_cells,dict_topcells['A2']['topcells_at_t'][fx][tx])]
-                if len(_cells_P1_tx) > 0:
-                    popact_P1[fx,i2,i1,ix] = np.mean(data_P1[_cells_P1_tx],axis=0)
-                if len(_cells_A1_tx) > 0:
-                    popact_A1[fx,i2,i1,ix] = np.mean(data_A1[_cells_A1_tx],axis=0)
-                if len(_cells_P2_tx) > 0:
-                    popact_P2[fx,i2,i1,ix] = np.mean(data_P2[_cells_P2_tx],axis=0)
-                if len(_cells_A2_tx) > 0:
-                    popact_A2[fx,i2,i1,ix] = np.mean(data_A2[_cells_A2_tx],axis=0)                
-mean_popact_P1 = np.mean(popact_P1,axis=0)
-mean_popact_A1 = np.mean(popact_A1,axis=0)
-mean_popact_P2 = np.mean(popact_P2,axis=0)
-mean_popact_A2 = np.mean(popact_A2,axis=0)
-
-
-for i1, k1 in enumerate(keys1):
-    for i2, k2 in enumerate(keys2):        
-        
-        mean_popact_P1_i2_i1 = mean_popact_P1[i2,i1]
-        mean_popact_A1_i2_i1 = mean_popact_A1[i2,i1]
-        mean_popact_P2_i2_i1 = mean_popact_P2[i2,i1]
-        mean_popact_A2_i2_i1 = mean_popact_A2[i2,i1]
-        
-        vmax = np.max([np.max(mean_popact_P1_i2_i1),np.max(mean_popact_A1_i2_i1),np.max(mean_popact_P2_i2_i1),np.max(mean_popact_A2_i2_i1)])
-
-        plt.figure(figsize=(4.3,3.8))    
-        plt.subplot(221)
-        plt.title(r'$P_1$',fontsize=12)
-        plt.imshow(mean_popact_P1_i2_i1,cmap='jet',aspect='auto',vmin=0,vmax=vmax)
-        plt.axvline(7,color='w',linestyle='--')
-        plt.axvline(15,color='w',linestyle='--')
-        plt.colorbar()
-        plt.subplot(222)
-        plt.title(r'$A_1$',fontsize=12)
-        plt.imshow(mean_popact_A1_i2_i1,cmap='jet',aspect='auto',vmin=0,vmax=vmax)
-        plt.axvline(7,color='w',linestyle='--')
-        plt.axvline(15,color='w',linestyle='--')
-        plt.colorbar()
-        plt.subplot(223)
-        plt.title(r'$P_2$',fontsize=12)
-        plt.imshow(mean_popact_P2_i2_i1,cmap='jet',aspect='auto',vmin=0,vmax=vmax)
-        plt.axvline(7,color='w',linestyle='--')
-        plt.axvline(15,color='w',linestyle='--')
-        plt.colorbar()
-        plt.subplot(224)
-        plt.title(r'$A_2$',fontsize=12)
-        plt.imshow(mean_popact_A2_i2_i1,cmap='jet',aspect='auto',vmin=0,vmax=vmax)
-        plt.axvline(7,color='w',linestyle='--')
-        plt.axvline(15,color='w',linestyle='--')
-        plt.colorbar()
-        plt.tight_layout()
-        plt.savefig(figpath + f'sequential/map_{i2}_{i1}_' + k2 + '_' + k1 + '.pdf')
-        
-
-        cmap = plt.cm.copper
-        colors = cmap(np.linspace(0, 1, 8))        
-        plt.figure(figsize=(3.3,3))
-        plt.subplot(221)
-        plt.title(r'$P_1$',fontsize=12)
-        for i in range(8):
-            plt.plot(mean_popact_P1_i2_i1[i], color=colors[i])
-        plt.axvline(7,color='gray',linestyle='--')
-        plt.axvline(15,color='gray',linestyle='--')
-        plt.ylim([0,vmax])
-        plt.gca().spines[['top', 'right']].set_visible(False)
-        plt.subplot(222)
-        plt.title(r'$A_1$',fontsize=12)
-        for i in range(8):
-            plt.plot(mean_popact_A1_i2_i1[i], color=colors[i])
-        plt.axvline(7,color='gray',linestyle='--')
-        plt.axvline(15,color='gray',linestyle='--')
-        plt.gca().spines[['top', 'right']].set_visible(False)
-        plt.ylim([0,vmax])
-        plt.subplot(223)
-        plt.title(r'$P_2$',fontsize=12)
-        for i in range(8):
-            plt.plot(mean_popact_P2_i2_i1[i], color=colors[i])
-        plt.axvline(7,color='gray',linestyle='--')
-        plt.axvline(15,color='gray',linestyle='--')
-        plt.gca().spines[['top', 'right']].set_visible(False)
-        plt.ylim([0,vmax])
-        plt.subplot(224)
-        plt.title(r'$A_2$',fontsize=12)
-        for i in range(8):
-            plt.plot(mean_popact_A2_i2_i1[i], color=colors[i])
-        plt.axvline(7,color='gray',linestyle='--')
-        plt.axvline(15,color='gray',linestyle='--')
-        plt.gca().spines[['top', 'right']].set_visible(False)
-        plt.ylim([0,vmax])
-        plt.tight_layout()
-        plt.savefig(figpath + f'sequential/trace_{i2}_{i1}_' + k2 + '_' + k1 + '.pdf')
-
-#%%
-def sort_data(x):
-    tmax   = np.argmax(x[:,8:16],axis=1)
-    cells_sorted = np.argsort(tmax)
-    x_sorted = x[cells_sorted]
-    return x_sorted
-
-def find_tmax(x):
-    tmax   = np.argmax(x[:,8:16],axis=1)
-    return tmax
-
-keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
-keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
-keys3 = ['P1','A1','P2','A2']
-mean_activity_A1 = np.zeros((nfile,6,8))
-mean_activity_P2 = np.zeros((nfile,6,8))
-
-dict_trialtypes = {
-    'P1': np.zeros((nfile,8)),
-    'A1': np.zeros((nfile,8)),
-    'P2': np.zeros((nfile,8)),
-    'A2': np.zeros((nfile,8))
-}
-dict_topcells_2 = {
-    'P2+A2-': copy.deepcopy(dict_trialtypes),
-    'P2+A2+': copy.deepcopy(dict_trialtypes),
-    'P2-A2+': copy.deepcopy(dict_trialtypes)
-}
-dict_mean_activity = {
-    'P1+A1-': copy.deepcopy(dict_topcells_2),
-    'P1+A1+': copy.deepcopy(dict_topcells_2),
-    'P1-A1+': copy.deepcopy(dict_topcells_2),
-}
-
-for fx in range(nfile):        
-    nonoutlier = fit_summary['nonoutlier'][fx]
-    for k1 in keys1:
-        for k2 in keys2:
-            for k3 in keys3:                
-                _data_k3 = modelfit[f'sess{fx}'][k3]['data'][nonoutlier,:]
-                dict_mean_activity[k1][k2][k3][fx] = np.sum(_data_k3[dict_topcells_1x2[fx][k1][k2]],axis=0)[8:16]
-                
-
-dict_norm_activity = {
-    'P1+A1-': copy.deepcopy(dict_topcells_2),
-    'P1+A1+': copy.deepcopy(dict_topcells_2),
-    'P1-A1+': copy.deepcopy(dict_topcells_2),
-}
-for fx in range(nfile):        
-    for k3 in keys3:                
-        _total_activity = np.zeros(8)
-        for k1 in keys1:
-            for k2 in keys2:
-                _total_activity += dict_mean_activity[k1][k2][k3][fx]
-        
-        for k1 in keys1:
-            for k2 in keys2:
-                dict_norm_activity[k1][k2][k3][fx] = dict_mean_activity[k1][k2][k3][fx] / _total_activity
-                
-cmap = plt.cm.copper
-colors = cmap(np.linspace(0, 1, nfile))
-plt.figure(figsize=(8,8))
-for i1, k1 in enumerate(keys1):
-    for i2, k2 in enumerate(keys2):        
-        plt.subplot(3,3,3*i2+i1+1)
-        for fx in range(nfile):
-            plt.plot(dict_norm_activity[k1][k2]['A1'][fx], color=colors[fx])
-        plt.plot(np.mean(dict_norm_activity[k1][k2]['A1'],axis=0),lw=4)
-        plt.ylim([0,0.6])
-plt.tight_layout()
-
-plt.figure(figsize=(8,8))
-for i1, k1 in enumerate(keys1):
-    for i2, k2 in enumerate(keys2):        
-        plt.subplot(3,3,3*i2+i1+1)
-        for fx in range(nfile):
-            plt.plot(dict_norm_activity[k1][k2]['P2'][fx], color=colors[fx])
-        plt.plot(np.mean(dict_norm_activity[k1][k2]['P2'],axis=0),lw=4)
-        plt.ylim([0,0.6])
-plt.tight_layout()
-
-
-####### within context ########
-
-# linear regression
-dict_trialtypes = {
-    'P1-A1': np.zeros((nfile,3)),
-    'P2-A2': np.zeros((nfile,3)),
-}
-dict_topcells_2 = {
-    'P2+A2-': copy.deepcopy(dict_trialtypes),
-    'P2+A2+': copy.deepcopy(dict_trialtypes),
-    'P2-A2+': copy.deepcopy(dict_trialtypes)
-}
-dict_linfit_within = {
-    'P1+A1-': copy.deepcopy(dict_topcells_2),
-    'P1+A1+': copy.deepcopy(dict_topcells_2),
-    'P1-A1+': copy.deepcopy(dict_topcells_2),
-}
-
-keys_context = ['P1-A1','P2-A2']
-linreg = linear_model.LinearRegression(fit_intercept=True)
-for k1 in keys1:
-    for k2 in keys2:
-        for kc in keys_context:
-            for fx in range(nfile):
-                if kc == 'P1-A1':
-                    _act  = dict_norm_activity[k1][k2]['P1'][fx] - dict_norm_activity[k1][k2]['A1'][fx]
-                if kc == 'P2-A2':
-                    _act  = dict_norm_activity[k1][k2]['P2'][fx] - dict_norm_activity[k1][k2]['A2'][fx]
-                _mean = np.mean(_act)
-                linreg.fit(np.arange(8).reshape(-1,1),_act)
-                dict_linfit_within[k1][k2][kc][fx] = np.array([linreg.coef_.item(), linreg.intercept_.item(), _mean])
-
-keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
-keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
-keys_context = ['P1-A1','P2-A2']
-
-fig = plt.figure(figsize=(10, 6))
-
-# 3 x 3 groups
-outer = fig.add_gridspec(3, 3, wspace=0.35, hspace=0.4)
-
-for i1, k1 in enumerate(keys1):
-    for i2, k2 in enumerate(keys2):
-
-        # two contexts placed close together
-        inner = outer[i2, i1].subgridspec(1, 2, wspace=0.08)
-
-        y1 = dict_linfit_within[k1][k2]['P1-A1'][:, 2]
-        y2 = dict_linfit_within[k1][k2]['P2-A2'][:, 2]
-
-        # common y range for direct comparison
-        ymin = np.nanmin([np.nanmin(y1), np.nanmin(y2)]) - 0.05
-        ymax = np.nanmax([np.nanmax(y1), np.nanmax(y2)]) + 0.05
-
-        for ic, kc in enumerate(keys_context):
-
-            ax = fig.add_subplot(inner[0, ic])
-            ax.spines[['top', 'right']].set_visible(False)
-            y = dict_linfit_within[k1][k2][kc][:, 2]
-            ax.axhline(0,color='gray',linestyle='--')
-            ax.scatter(
-                CDdotproduct,
-                y,
-                facecolor='none',
-                edgecolors='k'
-            )
-
-            _cor = np.corrcoef(CDdotproduct, y)[0, 1]
-
-            ax.set_ylim([ymin, ymax])
-            
-
-            if ic == 0:
-                ax.set_title(
-                    # k1 + '\n' + r'$P_1-A_1$' +
-                    # '\n' + 
-                    r'$r=$' + str(np.round(_cor, 3)),
-                    fontsize=9
-                )
-
-                # if i1 == 0:
-                #     ax.set_ylabel(k2)
-                None
-            else:
-                ax.set_title(
-                    # r'$P_2-A_2$' +
-                    # '\n' + 
-                    r'$r=$' + str(np.round(_cor, 3)),
-                    fontsize=9
-                )
-
-                # remove duplicate y labels/ticks
-                ax.set_yticklabels([])
-
-fig.tight_layout()
-plt.savefig(figpath + 'CDdotprod_with_context.pdf')
-
-
-####### across context ########
-
-dict_trialtypes = {
-    'P2-P1': np.zeros((nfile,3)),
-    'A2-A1': np.zeros((nfile,3)),
-}
-dict_topcells_2 = {
-    'P2+A2-': copy.deepcopy(dict_trialtypes),
-    'P2+A2+': copy.deepcopy(dict_trialtypes),
-    'P2-A2+': copy.deepcopy(dict_trialtypes)
-}
-dict_linfit_across = {
-    'P1+A1-': copy.deepcopy(dict_topcells_2),
-    'P1+A1+': copy.deepcopy(dict_topcells_2),
-    'P1-A1+': copy.deepcopy(dict_topcells_2),
-}
-keys_context = ['P2-P1','A2-A1']
-linreg = linear_model.LinearRegression(fit_intercept=True)
-for k1 in keys1:
-    for k2 in keys2:
-        for kc in keys_context:
-            for fx in range(nfile):
-                if kc == 'P2-P1':
-                    _act  = dict_norm_activity[k1][k2]['P2'][fx] - dict_norm_activity[k1][k2]['P1'][fx]
-                if kc == 'A2-A1':
-                    _act  = dict_norm_activity[k1][k2]['A2'][fx] - dict_norm_activity[k1][k2]['A1'][fx]
-                _mean = np.mean(_act)
-                linreg.fit(np.arange(8).reshape(-1,1),_act)
-                dict_linfit_across[k1][k2][kc][fx] = np.array([linreg.coef_.item(), linreg.intercept_.item(), _mean])
-
-keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
-keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
-
-fig = plt.figure(figsize=(10, 6))
-
-# 3 x 3 groups
-outer = fig.add_gridspec(3, 3, wspace=0.35, hspace=0.4)
-
-for i1, k1 in enumerate(keys1):
-    for i2, k2 in enumerate(keys2):
-
-        # two contexts placed close together
-        inner = outer[i2, i1].subgridspec(1, 2, wspace=0.08)
-
-        y1 = dict_linfit_across[k1][k2]['P2-P1'][:, 2]
-        y2 = dict_linfit_across[k1][k2]['A2-A1'][:, 2]
-
-        # common y range for direct comparison
-        ymin = np.nanmin([np.nanmin(y1), np.nanmin(y2)]) - 0.05
-        ymax = np.nanmax([np.nanmax(y1), np.nanmax(y2)]) + 0.05
-
-        for ic, kc in enumerate(keys_context):
-
-            ax = fig.add_subplot(inner[0, ic])
-            ax.spines[['top', 'right']].set_visible(False)
-            y = dict_linfit_across[k1][k2][kc][:, 2]
-            ax.axhline(0,color='gray',linestyle='--')
-            ax.scatter(
-                CDdotproduct,
-                y,
-                facecolor='none',
-                edgecolors='k'
-            )
-
-            _cor = np.corrcoef(CDdotproduct, y)[0, 1]
-
-            ax.set_ylim([ymin, ymax])
-            
-
-            if ic == 0:
-                ax.set_title(
-                    # k1 + '\n' + r'$P_1-A_1$' +
-                    # '\n' + 
-                    r'$r=$' + str(np.round(_cor, 3)),
-                    fontsize=9
-                )
-
-                # if i1 == 0:
-                #     ax.set_ylabel(k2)
-                None
-            else:
-                ax.set_title(
-                    # r'$P_2-A_2$' +
-                    # '\n' + 
-                    r'$r=$' + str(np.round(_cor, 3)),
-                    fontsize=9
-                )
-
-                # remove duplicate y labels/ticks
-                ax.set_yticklabels([])
-
-fig.tight_layout()
-plt.savefig(figpath + 'CDdotprod_across_context.pdf')
+# plt.savefig(figpath + 'P1+_A1+_hist.pdf')
 
 
 
 #%%
 #-----------------------------------------
 
-_mean_activity_A1 = np.mean(mean_activity_A1_norm, axis=0)  # shape: (6, time)
-_mean_activity_P2 = np.mean(mean_activity_P2_norm, axis=0)  # shape: (6, time)
-plt.figure(figsize=(4,4))
-plt.stackplot(np.arange(_mean_activity_A1.shape[1]),_mean_activity_A1,labels=[str(i+1) for i in range(6)],edgecolor='k',linewidth=0.5)
-plt.ylim([0, 1])
-plt.legend()
-plt.tight_layout()
+# _mean_activity_A1 = np.mean(mean_activity_A1_norm, axis=0)  # shape: (6, time)
+# _mean_activity_P2 = np.mean(mean_activity_P2_norm, axis=0)  # shape: (6, time)
+# plt.figure(figsize=(4,4))
+# plt.stackplot(np.arange(_mean_activity_A1.shape[1]),_mean_activity_A1,labels=[str(i+1) for i in range(6)],edgecolor='k',linewidth=0.5)
+# plt.ylim([0, 1])
+# plt.legend()
+# plt.tight_layout()
 
-plt.figure(figsize=(4,4))
-plt.stackplot(np.arange(_mean_activity_P2.shape[1]),_mean_activity_P2,labels=[str(i+1) for i in range(6)],edgecolor='k',linewidth=0.5)
-plt.ylim([0, 1])
-plt.legend()
-plt.tight_layout()
-
-
+# plt.figure(figsize=(4,4))
+# plt.stackplot(np.arange(_mean_activity_P2.shape[1]),_mean_activity_P2,labels=[str(i+1) for i in range(6)],edgecolor='k',linewidth=0.5)
+# plt.ylim([0, 1])
+# plt.legend()
+# plt.tight_layout()
 
 
-mean_activity_A1_avg = np.mean(mean_activity_A1_norm,axis=2)
-mean_activity_P2_avg = np.mean(mean_activity_P2_norm,axis=2)
 
-plt.figure(figsize=(9,6))
-for grp in range(6):
-    plt.subplot(2,3,grp+1)  
-    plt.scatter(CDdotproduct,mean_activity_A1_avg[:,grp],color=f'C{grp}')
-    _cor = np.corrcoef(CDdotproduct,mean_activity_A1_avg[:,grp])[0,1]
-    plt.title(str(np.round(_cor,decimals=3)))
-plt.tight_layout()
 
-plt.figure(figsize=(9,6))
-for grp in range(6):
-    plt.subplot(2,3,grp+1)  
-    plt.scatter(CDdotproduct,mean_activity_A1_avg[:,grp])
-    _cor = np.corrcoef(CDdotproduct,mean_activity_P2_avg[:,grp])[0,1]
-    plt.title(str(np.round(_cor,decimals=3)))
-plt.tight_layout()
+# mean_activity_A1_avg = np.mean(mean_activity_A1_norm,axis=2)
+# mean_activity_P2_avg = np.mean(mean_activity_P2_norm,axis=2)
+
+# plt.figure(figsize=(9,6))
+# for grp in range(6):
+#     plt.subplot(2,3,grp+1)  
+#     plt.scatter(CDdotproduct,mean_activity_A1_avg[:,grp],color=f'C{grp}')
+#     _cor = np.corrcoef(CDdotproduct,mean_activity_A1_avg[:,grp])[0,1]
+#     plt.title(str(np.round(_cor,decimals=3)))
+# plt.tight_layout()
+
+# plt.figure(figsize=(9,6))
+# for grp in range(6):
+#     plt.subplot(2,3,grp+1)  
+#     plt.scatter(CDdotproduct,mean_activity_A1_avg[:,grp])
+#     _cor = np.corrcoef(CDdotproduct,mean_activity_P2_avg[:,grp])[0,1]
+#     plt.title(str(np.round(_cor,decimals=3)))
+# plt.tight_layout()
 
 
 
@@ -1289,58 +1165,58 @@ plt.tight_layout()
 
 #%%
 
-frac_1x2_outof_totalcells = np.zeros(nfile)
-frac_1x2_outof_topcells_1   = np.zeros(nfile)
-CD1err = np.zeros(nfile)
-CD2err = np.zeros(nfile)
-CDdp = np.zeros(nfile)
-CDdp_1x2 = np.zeros(nfile)
-CDdp_1_2 = np.zeros(nfile)
-CDdp_2_1 = np.zeros(nfile)
-tix_latedelay = np.arange(12,16)
-for fx in range(nfile):
-    # topcells
-    topcells_P1 = np.concatenate([dict_topcells['P1']['topcells_at_t'][fx][i] for i in tix_latedelay])
-    topcells_A1 = np.concatenate([dict_topcells['A1']['topcells_at_t'][fx][i] for i in tix_latedelay])
-    topcells_P2 = np.concatenate([dict_topcells['P2']['topcells_at_t'][fx][i] for i in tix_latedelay])
-    topcells_A2 = np.concatenate([dict_topcells['A2']['topcells_at_t'][fx][i] for i in tix_latedelay])
+# frac_1x2_outof_totalcells = np.zeros(nfile)
+# frac_1x2_outof_topcells_1   = np.zeros(nfile)
+# CD1err = np.zeros(nfile)
+# CD2err = np.zeros(nfile)
+# CDdp = np.zeros(nfile)
+# CDdp_1x2 = np.zeros(nfile)
+# CDdp_1_2 = np.zeros(nfile)
+# CDdp_2_1 = np.zeros(nfile)
+# tix_latedelay = np.arange(12,16)
+# for fx in range(nfile):
+#     # topcells
+#     topcells_P1 = np.concatenate([dict_topcells['P1']['topcells_at_t'][fx][i] for i in tix_latedelay])
+#     topcells_A1 = np.concatenate([dict_topcells['A1']['topcells_at_t'][fx][i] for i in tix_latedelay])
+#     topcells_P2 = np.concatenate([dict_topcells['P2']['topcells_at_t'][fx][i] for i in tix_latedelay])
+#     topcells_A2 = np.concatenate([dict_topcells['A2']['topcells_at_t'][fx][i] for i in tix_latedelay])
 
-    # shared & nonshared topcells
-    topcells_1 = np.unique(np.concatenate((topcells_P1,topcells_A1)))
-    topcells_2 = np.unique(np.concatenate((topcells_P2,topcells_A2)))
-    topcells_1x2 = topcells_1[np.isin(topcells_1,topcells_2)]
-    topcells_1_2 = topcells_1[~np.isin(topcells_1,topcells_2)]
-    topcells_2_1 = topcells_2[~np.isin(topcells_2,topcells_1)]
+#     # shared & nonshared topcells
+#     topcells_1 = np.unique(np.concatenate((topcells_P1,topcells_A1)))
+#     topcells_2 = np.unique(np.concatenate((topcells_P2,topcells_A2)))
+#     topcells_1x2 = topcells_1[np.isin(topcells_1,topcells_2)]
+#     topcells_1_2 = topcells_1[~np.isin(topcells_1,topcells_2)]
+#     topcells_2_1 = topcells_2[~np.isin(topcells_2,topcells_1)]
     
-    # compute CD1, CD2
-    nonoutlier = fit_summary['nonoutlier'][fx]
-    data_P1   = modelfit[f'sess{fx}']['P1']['data'][nonoutlier,:]
-    data_A1   = modelfit[f'sess{fx}']['A1']['data'][nonoutlier,:]
-    data_P2   = modelfit[f'sess{fx}']['P2']['data'][nonoutlier,:]
-    data_A2   = modelfit[f'sess{fx}']['A2']['data'][nonoutlier,:]
-    diff1 = np.mean((data_P1 - data_A1)[:,12:16],axis=1)
-    diff2 = np.mean((data_P2 - data_A2)[:,12:16],axis=1)
-    CD1 = diff1 / np.linalg.norm(diff1)
-    CD2 = diff2 / np.linalg.norm(diff2)
+#     # compute CD1, CD2
+#     nonoutlier = fit_summary['nonoutlier'][fx]
+#     data_P1   = modelfit[f'sess{fx}']['P1']['data'][nonoutlier,:]
+#     data_A1   = modelfit[f'sess{fx}']['A1']['data'][nonoutlier,:]
+#     data_P2   = modelfit[f'sess{fx}']['P2']['data'][nonoutlier,:]
+#     data_A2   = modelfit[f'sess{fx}']['A2']['data'][nonoutlier,:]
+#     diff1 = np.mean((data_P1 - data_A1)[:,12:16],axis=1)
+#     diff2 = np.mean((data_P2 - data_A2)[:,12:16],axis=1)
+#     CD1 = diff1 / np.linalg.norm(diff1)
+#     CD2 = diff2 / np.linalg.norm(diff2)
 
-    # number of topcells shared across contexts
-    ncells = len(nonoutlier)
-    frac_1x2_outof_totalcells[fx] = len(topcells_1x2)/ncells    
-    frac_1x2_outof_topcells_1[fx] = len(topcells_1x2)/len(topcells_1)
+#     # number of topcells shared across contexts
+#     ncells = len(nonoutlier)
+#     frac_1x2_outof_totalcells[fx] = len(topcells_1x2)/ncells    
+#     frac_1x2_outof_topcells_1[fx] = len(topcells_1x2)/len(topcells_1)
 
-    # approximate CD1 and CD2
-    CD1aprx = np.zeros_like(CD1)
-    CD2aprx = np.zeros_like(CD2)
-    CD1aprx[topcells_1x2] = CD1[topcells_1x2]
-    CD2aprx[topcells_1x2] = CD2[topcells_1x2]
-    CD1err[fx] = np.linalg.norm(CD1aprx - CD1)
-    CD2err[fx] = np.linalg.norm(CD2aprx - CD2)
+#     # approximate CD1 and CD2
+#     CD1aprx = np.zeros_like(CD1)
+#     CD2aprx = np.zeros_like(CD2)
+#     CD1aprx[topcells_1x2] = CD1[topcells_1x2]
+#     CD2aprx[topcells_1x2] = CD2[topcells_1x2]
+#     CD1err[fx] = np.linalg.norm(CD1aprx - CD1)
+#     CD2err[fx] = np.linalg.norm(CD2aprx - CD2)
     
-    # approximate CD1CD2
-    CDdp[fx] = np.inner(CD1,CD2)
-    CDdp_1x2[fx] = np.inner(CD1[topcells_1x2],CD2[topcells_1x2])
-    CDdp_1_2[fx] = np.inner(CD1[topcells_1_2],CD2[topcells_1_2])
-    CDdp_2_1[fx] = np.inner(CD1[topcells_2_1],CD2[topcells_2_1])
+#     # approximate CD1CD2
+#     CDdp[fx] = np.inner(CD1,CD2)
+#     CDdp_1x2[fx] = np.inner(CD1[topcells_1x2],CD2[topcells_1x2])
+#     CDdp_1_2[fx] = np.inner(CD1[topcells_1_2],CD2[topcells_1_2])
+#     CDdp_2_1[fx] = np.inner(CD1[topcells_2_1],CD2[topcells_2_1])
     
 
 #%%
