@@ -747,7 +747,7 @@ for i1, k1 in enumerate(keys1):
                 ax.set_yticklabels([])
 
 fig.tight_layout()
-plt.savefig(figpath + 'CDdotprod_with_context.pdf')
+plt.savefig(figpath + 'CDdotprod_within_context.pdf')
 
 
 
