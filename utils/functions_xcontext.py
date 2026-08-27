@@ -136,7 +136,7 @@ def create_dict_CDdotprod_err(nfile, dict_CDdp, CDdp):
 
     return dict_CDdp_err
 
-def create_dict_module_activity(nfile, dict_topcells_1x2, fit_summary, modelfit, keys1, keys2):
+def create_dict_module_activity(nfile, dict_topcells_1x2, fit_summary, modelfit, keys1, keys2, keys3):
     
     dict_trialtypes = {
         'P1': np.zeros((nfile,24)),
@@ -157,28 +157,22 @@ def create_dict_module_activity(nfile, dict_topcells_1x2, fit_summary, modelfit,
 
     for fx in range(nfile):
         nonoutlier = fit_summary['nonoutlier'][fx]
-        data_P1   = modelfit[f'sess{fx}']['P1']['data'][nonoutlier,:]
-        data_A1   = modelfit[f'sess{fx}']['A1']['data'][nonoutlier,:]
-        data_P2   = modelfit[f'sess{fx}']['P2']['data'][nonoutlier,:]
-        data_A2   = modelfit[f'sess{fx}']['A2']['data'][nonoutlier,:]
-
         for k1 in keys1:
             for k2 in keys2:
-                _topcells = dict_topcells_1x2[fx][k1][k2]
-                _P1 = np.mean(data_P1[_topcells],axis=0) if len(_topcells) > 0 else np.zeros(data_P1.shape[1])
-                _A1 = np.mean(data_A1[_topcells],axis=0) if len(_topcells) > 0 else np.zeros(data_P1.shape[1])
-                _P2 = np.mean(data_P2[_topcells],axis=0) if len(_topcells) > 0 else np.zeros(data_P1.shape[1])
-                _A2 = np.mean(data_A2[_topcells],axis=0) if len(_topcells) > 0 else np.zeros(data_P1.shape[1])
-                dict_module_activity[k1][k2]['P1'][fx] = _P1
-                dict_module_activity[k1][k2]['A1'][fx] = _A1
-                dict_module_activity[k1][k2]['P2'][fx] = _P2
-                dict_module_activity[k1][k2]['A2'][fx] = _A2
-    
+                _topcells_1x2 = dict_topcells_1x2[fx][k1][k2]
+                for k3 in keys3:
+                    _data_k3 = modelfit[f'sess{fx}'][k3]['data'][nonoutlier,:]
+                    if len(_topcells_1x2) > 0:
+                        _data_k3_module = np.sum(_data_k3[_topcells_1x2],axis=0)
+                    else:
+                        _data_k3_module = np.zeros(_data_k3.shape[1])
+                    dict_module_activity[k1][k2][k3][fx] = _data_k3_module
+                    
     return dict_module_activity
 
 
 
-def create_dict_normalized_activity(nfile, dict_module_activity, keys1, keys2, keys3):
+def create_dict_normalized_activity(nfile, dict_module_activity, fit_summary, modelfit, dict_topcells_1x2, keys1, keys2, keys3):
     
     dict_trialtypes = {
         'P1': np.zeros((nfile,24)),
@@ -196,25 +190,70 @@ def create_dict_normalized_activity(nfile, dict_module_activity, keys1, keys2, k
         'P1+A1+': copy.deepcopy(dict_topcells_2),
         'P1-A1+': copy.deepcopy(dict_topcells_2),
     }
+    
+    #---- different versions of normalization ---#
+    # # (1)
+    # total_activity = {
+    #     'P1': np.zeros((nfile,24)),
+    #     'A1': np.zeros((nfile,24)),
+    #     'P2': np.zeros((nfile,24)),
+    #     'A2': np.zeros((nfile,24))
+    # }
+    # for fx in range(nfile):
+    #     for k3 in keys3:
+    #         for k2 in keys2:
+    #             for k1 in keys1:
+    #                 # total_activity[k3][fx] += dict_module_activity[k1][k2][k3][fx]
+    #                 total_activity[k3][fx] += np.mean((dict_module_activity[k1][k2][k3][fx])[12:16])
+                
+    # # normalized activity
+    # for fx in range(nfile):
+    #     for k3 in keys3:
+    #         for k2 in keys2:
+    #             for k1 in keys1:                
+    #                 dict_normalized_activity[k1][k2][k3][fx] = dict_module_activity[k1][k2][k3][fx] / total_activity[k3][fx]
+    
+    
+    # (2)
     total_activity = {
-        'P1': np.zeros((nfile,24)),
-        'A1': np.zeros((nfile,24)),
-        'P2': np.zeros((nfile,24)),
-        'A2': np.zeros((nfile,24))
+        'P1A1': np.zeros(nfile),
+        'P2A2': np.zeros(nfile),
     }
-    # total activity of session and trial type
+
     for fx in range(nfile):
-        for k3 in keys3:
+        nonoutlier = fit_summary['nonoutlier'][fx]
+        for k1 in keys1:
             for k2 in keys2:
-                for k1 in keys1:
-                    total_activity[k3][fx] += dict_module_activity[k1][k2][k3][fx]
+                _topcells_1x2 = dict_topcells_1x2[fx][k1][k2]
+                if len(_topcells_1x2) > 0:
+                    # context 1
+                    _data_P1 = modelfit[f'sess{fx}']['P1']['data'][nonoutlier,:]
+                    _data_A1 = modelfit[f'sess{fx}']['A1']['data'][nonoutlier,:]
+                    _data_P1_topcells = np.mean(_data_P1[_topcells_1x2,12:16],axis=1)
+                    _data_A1_topcells = np.mean(_data_A1[_topcells_1x2,12:16],axis=1)
+                    total_activity['P1A1'][fx] += np.sum((_data_P1_topcells - _data_A1_topcells)**2)
+                    # context 2
+                    _data_P2 = modelfit[f'sess{fx}']['P2']['data'][nonoutlier,:]
+                    _data_A2 = modelfit[f'sess{fx}']['A2']['data'][nonoutlier,:]
+                    _data_P2_topcells = np.mean(_data_P2[_topcells_1x2,12:16],axis=1)
+                    _data_A2_topcells = np.mean(_data_A2[_topcells_1x2,12:16],axis=1)
+                    total_activity['P2A2'][fx] += np.sum((_data_P2_topcells - _data_A2_topcells)**2)                    
+                else:
+                    total_activity['P1A1'][fx] += 0
+                    total_activity['P2A2'][fx] += 0
+        total_activity['P2A2'][fx] = np.sqrt(total_activity['P2A2'][fx])
+        
     # normalized activity
     for fx in range(nfile):
         for k3 in keys3:
             for k2 in keys2:
                 for k1 in keys1:                
-                    dict_normalized_activity[k1][k2][k3][fx] = dict_module_activity[k1][k2][k3][fx] / total_activity[k3][fx]
-    
+                    if k3 == 'P1' or k3 == 'A1':
+                        dict_normalized_activity[k1][k2][k3][fx] = dict_module_activity[k1][k2][k3][fx] / total_activity['P1A1'][fx]
+                    if k3 == 'P2' or k3 == 'A2':
+                        dict_normalized_activity[k1][k2][k3][fx] = dict_module_activity[k1][k2][k3][fx] / total_activity['P2A2'][fx]
+
+        
     return dict_normalized_activity
 
 

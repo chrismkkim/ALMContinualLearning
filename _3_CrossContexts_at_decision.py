@@ -110,9 +110,9 @@ dict_CDdp, CDdp, CDdp_1x2 = functions_xcontext.create_dict_CDdotprod(nfile, dict
 
 dict_CDdp_err = functions_xcontext.create_dict_CDdotprod_err(nfile, dict_CDdp, CDdp)
 
-dict_module_activity = functions_xcontext.create_dict_module_activity(nfile, dict_topcells_1x2, fit_summary, modelfit, keys1, keys2)
+dict_module_activity = functions_xcontext.create_dict_module_activity(nfile, dict_topcells_1x2, fit_summary, modelfit, keys1, keys2, keys3)
 
-dict_normalized_activity = functions_xcontext.create_dict_normalized_activity(nfile, dict_module_activity, keys1, keys2, keys3)
+dict_normalized_activity = functions_xcontext.create_dict_normalized_activity(nfile, dict_module_activity, fit_summary, modelfit, dict_topcells_1x2, keys1, keys2, keys3)
 
 sequential_P1, sequential_A1, sequential_P2, sequential_A2 = functions_xcontext.create_sequential_activity(nfile, dict_topcells_1x2, dict_topcells, fit_summary, modelfit, keys1, keys2)
 
@@ -131,6 +131,38 @@ for k1 in keys1:
        sum += dict_normalized_activity[k1][k2]['P1'][fx,tx]
 
 print(sum)
+
+meanrate = {i:np.array([]) for i in range(nfile)}
+
+for fx in range(nfile):
+    nonoutlier = fit_summary['nonoutlier'][fx]
+    for k1 in keys1:
+        for k2 in keys2:
+            k3 = 'P1'
+            _topcells_1x2 = dict_topcells_1x2[fx][k1][k2]
+            _data_k3 = modelfit[f'sess{fx}'][k3]['data'][nonoutlier,:]
+            if len(_topcells_1x2) > 0:
+                _data_k3_topcells_1x2 = np.mean(_data_k3[_topcells_1x2,12:16],axis=1)
+                meanrate[fx] = np.concatenate((meanrate[fx],_data_k3_topcells_1x2))
+
+poprate = np.zeros(nfile)
+for fx in range(nfile):
+    poprate[fx] = np.mean((meanrate[fx])[meanrate[fx]>0])                
+                
+
+plt.figure(figsize=(2,2))                
+plt.plot(poprate)
+plt.tight_layout()
+
+                
+plt.figure(figsize=(6,6))                
+for fx in np.arange(20,29):
+    plt.subplot(3,3,fx-19)
+    _meanrate = meanrate[fx][meanrate[fx] > 0]
+    plt.hist(np.log10(_meanrate),bins=40,histtype='step', range=(-4,0), density=True)
+    plt.axvline(np.log10(np.mean(_meanrate)))
+plt.tight_layout()
+                
 
 #%%
 #--------------#
@@ -498,7 +530,7 @@ for i2, key2 in enumerate(keys2):
             linestyle='none'
         )
         plt.xlim([-0.5,1.5])
-        plt.ylim([-0.3,0.3])
+        # plt.ylim([-0.3,0.3])
         # Titles
         if i2 == 0:
             ax1.set_title(titles1[i1], fontsize=12)
@@ -534,8 +566,8 @@ for i2, key2 in enumerate(keys2):
         # top: context 1
         # print('key1', key1)
         
-        diff1 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_delay_range] - dict_module_activity[key1][key2]['P1'][:,tix_delay_range], axis=1)
-        diff2 = np.nanmean(dict_module_activity[key1][key2]['A2'][:,tix_delay_range] - dict_module_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
+        diff1 = np.nanmean(dict_normalized_activity[key1][key2]['P2'][:,tix_delay_range] - dict_normalized_activity[key1][key2]['P1'][:,tix_delay_range], axis=1)
+        diff2 = np.nanmean(dict_normalized_activity[key1][key2]['A2'][:,tix_delay_range] - dict_normalized_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
         diff1_mean = np.nanmean(diff1)
         diff2_mean = np.nanmean(diff2)        
         diff1_std  = np.nanstd(diff1)
@@ -592,7 +624,7 @@ for i2, key2 in enumerate(keys2):
             linestyle='none'
         )
         plt.xlim([-0.5,1.5])
-        plt.ylim([-0.3,0.3])
+        # plt.ylim([-0.3,0.3])
         # Titles
         if i2 == 0:
             ax1.set_title(titles1[i1], fontsize=12)
@@ -606,7 +638,7 @@ for i2, key2 in enumerate(keys2):
             ax1.set_xticks([0,1])
             ax1.set_xticklabels([])
 plt.tight_layout()
-plt.savefig(figpath + 'neuron_group_individuals_cross_context.pdf')
+# plt.savefig(figpath + 'neuron_group_individuals_cross_context.pdf')
 
 
 
@@ -747,7 +779,7 @@ for i1, k1 in enumerate(keys1):
                 ax.set_yticklabels([])
 
 fig.tight_layout()
-plt.savefig(figpath + 'CDdotprod_within_context.pdf')
+# plt.savefig(figpath + 'CDdotprod_within_context.pdf')
 
 
 
@@ -805,7 +837,7 @@ for i1, k1 in enumerate(keys1):
                 ax.set_yticklabels([])
 
 fig.tight_layout()
-plt.savefig(figpath + 'CDdotprod_across_context.pdf')
+# plt.savefig(figpath + 'CDdotprod_across_context.pdf')
 
 
 
