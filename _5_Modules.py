@@ -12,6 +12,7 @@ from sklearn.decomposition import PCA
 import copy
 import importlib
 from utils import functions, functions_xcontext
+from utils import plot_modules
 
 
 # %%
@@ -102,7 +103,7 @@ importlib.reload(functions_xcontext)
 
 #%%
 
-tix_delay_range = np.arange(8,16)
+tix_delay_range = np.arange(12,16)
 
 dict_topcells_1x2 = functions_xcontext.create_dict_topcells_1x2(nfile, dict_topcells, tix_delay_range)
 
@@ -116,53 +117,64 @@ dict_normalized_activity = functions_xcontext.create_dict_normalized_activity(nf
 
 sequential_P1, sequential_A1, sequential_P2, sequential_A2 = functions_xcontext.create_sequential_activity(nfile, dict_topcells_1x2, dict_topcells, fit_summary, modelfit, keys1, keys2)
 
-dict_within_selectivity = functions_xcontext.create_dict_within_selectivity(nfile, dict_normalized_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
-dict_across_activity    = functions_xcontext.create_dict_across_activity(nfile, dict_normalized_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
-
+dict_within_selectivity = functions_xcontext.create_dict_within_selectivity(nfile, dict_module_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
+dict_across_activity    = functions_xcontext.create_dict_across_activity(nfile, dict_module_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
+dict_across_context_and_trial_activity    = functions_xcontext.create_dict_across_context_and_trial_activity(nfile, dict_module_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
 
 
 #%%
 
-fx = 10
-tx = 14
-sum = 0
-for k1 in keys1:
-    for k2 in keys2:
-       sum += dict_normalized_activity[k1][k2]['P1'][fx,tx]
+module_plots = plot_modules.ModulePlots(
+    figpath=figpath,
+    nfile=nfile,
+    fit_summary=fit_summary,
+    dict_topcells_1x2=dict_topcells_1x2,
+    CDdotproduct=CDdotproduct,
+    dict_CDdp_err=dict_CDdp_err,
+    dict_module_activity=dict_module_activity,
+    tix_delay_range=tix_delay_range,
+    sequential_P1=sequential_P1,
+    sequential_A1=sequential_A1,
+    sequential_P2=sequential_P2,
+    sequential_A2=sequential_A2,
+    dict_within_selectivity=dict_within_selectivity,
+    dict_across_activity=dict_across_activity,
+    dict_across_context_and_trial_activity=dict_across_context_and_trial_activity,
+    keys_within_context=keys_within_context,
+    keys_across_context=keys_across_context
+)
 
-print(sum)
+#%%
 
-meanrate = {i:np.array([]) for i in range(nfile)}
+module_plots.plot_module_size(savefig=False)
 
-for fx in range(nfile):
-    nonoutlier = fit_summary['nonoutlier'][fx]
-    for k1 in keys1:
-        for k2 in keys2:
-            k3 = 'P1'
-            _topcells_1x2 = dict_topcells_1x2[fx][k1][k2]
-            _data_k3 = modelfit[f'sess{fx}'][k3]['data'][nonoutlier,:]
-            if len(_topcells_1x2) > 0:
-                _data_k3_topcells_1x2 = np.mean(_data_k3[_topcells_1x2,12:16],axis=1)
-                meanrate[fx] = np.concatenate((meanrate[fx],_data_k3_topcells_1x2))
+module_plots.plot_CDdotprod_error(savefig=False)
 
-poprate = np.zeros(nfile)
-for fx in range(nfile):
-    poprate[fx] = np.mean((meanrate[fx])[meanrate[fx]>0])                
-                
+module_plots.plot_module_activity(savefig=False)
 
-plt.figure(figsize=(2,2))                
-plt.plot(poprate)
-plt.tight_layout()
+module_plots.plot_sequential_activity(savefig=False)
 
-                
-plt.figure(figsize=(6,6))                
-for fx in np.arange(20,29):
-    plt.subplot(3,3,fx-19)
-    _meanrate = meanrate[fx][meanrate[fx] > 0]
-    plt.hist(np.log10(_meanrate),bins=40,histtype='step', range=(-4,0), density=True)
-    plt.axvline(np.log10(np.mean(_meanrate)))
-plt.tight_layout()
-                
+module_plots.plot_CDdotproduct_vs_module_activity(savefig=False)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 #%%
 #--------------#
@@ -220,7 +232,7 @@ for i2, key2 in enumerate(keys2):
             linestyle='none'
         )
         plt.xlim([-0.5,0.5])
-        plt.ylim([0.0,0.13])
+        plt.ylim([0.0,0.1])
         # Titles
         if i2 == 0:
             ax1.set_title(titles1[i1], fontsize=12)
@@ -229,6 +241,7 @@ for i2, key2 in enumerate(keys2):
             ax1.set_ylabel(labels2[i2], fontsize=12)            
         ax1.set_xticks([-0.5,0,0.5])
         ax1.set_xticklabels([])
+        ax1.set_yticks([0,0.05,0.1])
         plt.gca().spines[['top', 'right']].set_visible(False)            
 plt.tight_layout()
 plt.savefig(figpath + 'module_sizes.pdf')
@@ -318,7 +331,7 @@ plt.errorbar(
     linestyle='none'
 )
 plt.xticks([-0.5,0,0.5],[])
-plt.yticks([0,100,200,300,400,500])
+plt.yticks([0,100,200,300,400])
 plt.gca().spines[['top', 'right']].set_visible(False)
 plt.ylabel('# of neurons')
 plt.tight_layout()
@@ -405,6 +418,294 @@ plt.savefig(figpath + 'CDdotprod_error.pdf')
 # neural activity of modules
 #-----------------------------------#
 
+
+fig = plt.figure(figsize=(6, 6))
+gs = fig.add_gridspec(
+    3, 3,
+    hspace=0.3,   # small spacing overall
+    wspace=0.5
+)
+bar_width = 0.6
+titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
+labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
+for i2, key2 in enumerate(keys2):
+    for i1, key1 in enumerate(keys1):        
+        diff1 = np.nanmean(dict_module_activity[key1][key2]['P1'][:,tix_delay_range] - dict_module_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
+        diff2 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_delay_range] - dict_module_activity[key1][key2]['A2'][:,tix_delay_range], axis=1)
+        diff1_mean = np.nanmean(diff1)
+        diff2_mean = np.nanmean(diff2)        
+        diff1_std  = np.nanstd(diff1)
+        diff2_std  = np.nanstd(diff2)
+        
+        ymax = np.max(np.concatenate((diff1, diff2))) + 0.02
+        ymin = np.min(np.concatenate((diff1, diff2))) - 0.02
+        if diff1_mean > 0:
+            c1 = 'purple'
+        else:
+            c1 = 'limegreen'
+        if diff2_mean > 0:
+            c2 = 'purple'
+        else:
+            c2 = 'limegreen'            
+        
+        ax1 = fig.add_subplot(gs[i2, i1])
+        # Bar: mean
+        plt.bar(
+            [0,1],
+            [diff1_mean,diff2_mean],
+            width=bar_width,
+            color=[c1,c2],
+            edgecolor=[c1,c2],
+            zorder=1,
+            alpha=0.5
+        )
+        # Scatter with horizontal jitter
+        jitter = 0.1 * (2 * np.random.rand(len(diff1)) - 1)
+        plt.scatter(
+            0 + jitter,
+            diff1,
+            s=12,
+            facecolors='none',
+            edgecolors=c1,
+            linewidths=0.5,
+            alpha=1
+        )    
+        plt.scatter(
+            1 + jitter,
+            diff2,
+            s=12,
+            facecolors='none',
+            edgecolors=c2,
+            linewidths=0.5,
+            alpha=0.8
+        )    
+        # Error bar (SEM)
+        plt.errorbar(
+            [0,1],
+            [diff1_mean,diff2_mean],
+            yerr=[diff1_std / np.sqrt(len(diff1)), diff2_std / np.sqrt(len(diff2))],
+            color='k',
+            capsize=8,
+            lw=1.5,
+            linestyle='none'
+        )
+        plt.xlim([-0.5,1.5])
+        plt.ylim([ymin,ymax])
+        # Titles
+        if i2 == 0:
+            ax1.set_title(titles1[i1], fontsize=12)
+        # Row labels
+        if i1 == 0:
+            ax1.set_ylabel(labels2[i2], fontsize=12)            
+        if i2 == 2:
+            ax1.set_xticks([0,1])
+            ax1.set_xticklabels(['Context 1', 'Context 2'], rotation=45)
+        else:
+            ax1.set_xticks([0,1])
+            ax1.set_xticklabels([])
+plt.tight_layout()
+
+plt.savefig(figpath + 'module_within_context.pdf')
+
+
+
+
+fig = plt.figure(figsize=(6, 6))
+gs = fig.add_gridspec(
+    3, 3,
+    hspace=0.3,   # small spacing overall
+    wspace=0.5
+)
+bar_width = 0.6
+keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
+keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
+titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
+labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
+for i2, key2 in enumerate(keys2):
+    # print('key2', key2)
+    for i1, key1 in enumerate(keys1):
+        # top: context 1
+        # print('key1', key1)
+        
+        diff1 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_delay_range] - dict_module_activity[key1][key2]['P1'][:,tix_delay_range], axis=1)
+        diff2 = np.nanmean(dict_module_activity[key1][key2]['A2'][:,tix_delay_range] - dict_module_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
+        diff1_mean = np.nanmean(diff1)
+        diff2_mean = np.nanmean(diff2)        
+        diff1_std  = np.nanstd(diff1)
+        diff2_std  = np.nanstd(diff2)
+        
+        ymax = np.max(np.concatenate((diff1, diff2))) + 0.02
+        ymin = np.min(np.concatenate((diff1, diff2))) - 0.02
+
+        if diff1_mean > 0:
+            c1 = 'tab:cyan'
+        else:
+            c1 = 'gray'
+        if diff2_mean > 0:
+            c2 = 'tab:cyan'
+        else:
+            c2 = 'gray'            
+        
+        ax1 = fig.add_subplot(gs[i2, i1])
+        # Bar: mean
+        plt.bar(
+            [0,1],
+            [diff1_mean,diff2_mean],
+            width=bar_width,
+            color=[c1,c2],
+            edgecolor=[c1,c2],
+            zorder=1,
+            alpha=0.5
+        )
+        # Scatter with horizontal jitter
+        jitter = 0.1 * (2 * np.random.rand(len(diff1)) - 1)
+        plt.scatter(
+            0 + jitter,
+            diff1,
+            s=12,
+            facecolors='none',
+            edgecolors=c1,
+            linewidths=0.5,
+            alpha=1
+        )    
+        plt.scatter(
+            1 + jitter,
+            diff2,
+            s=12,
+            facecolors='none',
+            edgecolors=c2,
+            linewidths=0.5,
+            alpha=1
+        )    
+        # Error bar (SEM)
+        plt.errorbar(
+            [0,1],
+            [diff1_mean,diff2_mean],
+            yerr=[diff1_std / np.sqrt(len(diff1)), diff2_std / np.sqrt(len(diff2))],
+            color='k',
+            capsize=8,
+            lw=1.5,
+            linestyle='none'
+        )
+        plt.xlim([-0.5,1.5])
+        plt.ylim([ymin,ymax])
+        # Titles
+        if i2 == 0:
+            ax1.set_title(titles1[i1], fontsize=12)
+        # Row labels
+        if i1 == 0:
+            ax1.set_ylabel(labels2[i2], fontsize=12)            
+        if i2 == 2:
+            ax1.set_xticks([0,1])
+            ax1.set_xticklabels([r'$P_2-P_1$', r'$A_2-A_1$'], rotation=45)
+        else:
+            ax1.set_xticks([0,1])
+            ax1.set_xticklabels([])
+plt.tight_layout()
+
+plt.savefig(figpath + 'module_cross_context.pdf')
+
+
+
+
+fig = plt.figure(figsize=(6, 6))
+gs = fig.add_gridspec(
+    3, 3,
+    hspace=0.3,   # small spacing overall
+    wspace=0.5
+)
+bar_width = 0.6
+keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
+keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
+titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
+labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
+for i2, key2 in enumerate(keys2):
+    # print('key2', key2)
+    for i1, key1 in enumerate(keys1):
+        # top: context 1
+        # print('key1', key1)
+        
+        diff1 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_delay_range] - dict_module_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
+        diff2 = np.nanmean(dict_module_activity[key1][key2]['A2'][:,tix_delay_range] - dict_module_activity[key1][key2]['P1'][:,tix_delay_range], axis=1)
+        diff1_mean = np.nanmean(diff1)
+        diff2_mean = np.nanmean(diff2)        
+        diff1_std  = np.nanstd(diff1)
+        diff2_std  = np.nanstd(diff2)
+        
+        ymax = np.max(np.concatenate((diff1, diff2))) + 0.02
+        ymin = np.min(np.concatenate((diff1, diff2))) - 0.02
+
+        if diff1_mean > 0:
+            c1 = 'tab:olive'
+        else:
+            c1 = 'gray'
+        if diff2_mean > 0:
+            c2 = 'tab:olive'
+        else:
+            c2 = 'gray'            
+        
+        ax1 = fig.add_subplot(gs[i2, i1])
+        # Bar: mean
+        plt.bar(
+            [0,1],
+            [diff1_mean,diff2_mean],
+            width=bar_width,
+            color=[c1,c2],
+            edgecolor=[c1,c2],
+            zorder=1,
+            alpha=0.5
+        )
+        # Scatter with horizontal jitter
+        jitter = 0.1 * (2 * np.random.rand(len(diff1)) - 1)
+        plt.scatter(
+            0 + jitter,
+            diff1,
+            s=12,
+            facecolors='none',
+            edgecolors=c1,
+            linewidths=0.5,
+            alpha=1
+        )    
+        plt.scatter(
+            1 + jitter,
+            diff2,
+            s=12,
+            facecolors='none',
+            edgecolors=c2,
+            linewidths=0.5,
+            alpha=1
+        )    
+        # Error bar (SEM)
+        plt.errorbar(
+            [0,1],
+            [diff1_mean,diff2_mean],
+            yerr=[diff1_std / np.sqrt(len(diff1)), diff2_std / np.sqrt(len(diff2))],
+            color='k',
+            capsize=8,
+            lw=1.5,
+            linestyle='none'
+        )
+        plt.xlim([-0.5,1.5])
+        plt.ylim([ymin,ymax])
+        # Titles
+        if i2 == 0:
+            ax1.set_title(titles1[i1], fontsize=12)
+        # Row labels
+        if i1 == 0:
+            ax1.set_ylabel(labels2[i2], fontsize=12)            
+        if i2 == 2:
+            ax1.set_xticks([0,1])
+            ax1.set_xticklabels([r'$P_2-A_1$', r'$A_2-P_1$'], rotation=45)
+        else:
+            ax1.set_xticks([0,1])
+            ax1.set_xticklabels([])
+plt.tight_layout()
+
+plt.savefig(figpath + 'module_cross_context_and_trial.pdf')
+
+
+
+
 fig = plt.figure(figsize=(6, 8))
 gs = fig.add_gridspec(
     6, 3,
@@ -457,190 +758,7 @@ for i2, key2 in enumerate(keys2):
             ax1.annotate('Context1', xy=(0.45,0.8), xycoords='axes fraction')
             ax2.annotate('Context2', xy=(0.45,0.8), xycoords='axes fraction')
 plt.tight_layout()
-# plt.savefig(figpath + 'neuron_group_traces.pdf')
-
-
-
-fig = plt.figure(figsize=(6, 6))
-gs = fig.add_gridspec(
-    3, 3,
-    hspace=0.3,   # small spacing overall
-    wspace=0.5
-)
-bar_width = 0.6
-titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
-labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
-for i2, key2 in enumerate(keys2):
-    for i1, key1 in enumerate(keys1):        
-        diff1 = np.nanmean(dict_normalized_activity[key1][key2]['P1'][:,tix_delay_range] - dict_normalized_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
-        diff2 = np.nanmean(dict_normalized_activity[key1][key2]['P2'][:,tix_delay_range] - dict_normalized_activity[key1][key2]['A2'][:,tix_delay_range], axis=1)
-        diff1_mean = np.nanmean(diff1)
-        diff2_mean = np.nanmean(diff2)        
-        diff1_std  = np.nanstd(diff1)
-        diff2_std  = np.nanstd(diff2)
-        
-        if diff1_mean > 0:
-            c1 = 'purple'
-        else:
-            c1 = 'limegreen'
-        if diff2_mean > 0:
-            c2 = 'purple'
-        else:
-            c2 = 'limegreen'            
-        
-        ax1 = fig.add_subplot(gs[i2, i1])
-        # Bar: mean
-        plt.bar(
-            [0,1],
-            [diff1_mean,diff2_mean],
-            width=bar_width,
-            color=[c1,c2],
-            edgecolor=[c1,c2],
-            zorder=1,
-            alpha=0.5
-        )
-        # Scatter with horizontal jitter
-        jitter = 0.1 * (2 * np.random.rand(len(diff1)) - 1)
-        plt.scatter(
-            0 + jitter,
-            diff1,
-            s=12,
-            facecolors='none',
-            edgecolors=c1,
-            linewidths=0.5,
-            alpha=1
-        )    
-        plt.scatter(
-            1 + jitter,
-            diff2,
-            s=12,
-            facecolors='none',
-            edgecolors=c2,
-            linewidths=0.5,
-            alpha=0.8
-        )    
-        # Error bar (SEM)
-        plt.errorbar(
-            [0,1],
-            [diff1_mean,diff2_mean],
-            yerr=[diff1_std / np.sqrt(len(diff1)), diff2_std / np.sqrt(len(diff2))],
-            color='k',
-            capsize=8,
-            lw=1.5,
-            linestyle='none'
-        )
-        plt.xlim([-0.5,1.5])
-        # plt.ylim([-0.3,0.3])
-        # Titles
-        if i2 == 0:
-            ax1.set_title(titles1[i1], fontsize=12)
-        # Row labels
-        if i1 == 0:
-            ax1.set_ylabel(labels2[i2], fontsize=12)            
-        if i2 == 2:
-            ax1.set_xticks([0,1])
-            ax1.set_xticklabels(['Context 1', 'Context 2'], rotation=45)
-        else:
-            ax1.set_xticks([0,1])
-            ax1.set_xticklabels([])
-plt.tight_layout()
-# plt.savefig(figpath + 'neuron_group_individuals_within_context.pdf')
-
-
-
-
-fig = plt.figure(figsize=(6, 6))
-gs = fig.add_gridspec(
-    3, 3,
-    hspace=0.3,   # small spacing overall
-    wspace=0.5
-)
-bar_width = 0.6
-keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
-keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
-titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
-labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
-for i2, key2 in enumerate(keys2):
-    # print('key2', key2)
-    for i1, key1 in enumerate(keys1):
-        # top: context 1
-        # print('key1', key1)
-        
-        diff1 = np.nanmean(dict_normalized_activity[key1][key2]['P2'][:,tix_delay_range] - dict_normalized_activity[key1][key2]['P1'][:,tix_delay_range], axis=1)
-        diff2 = np.nanmean(dict_normalized_activity[key1][key2]['A2'][:,tix_delay_range] - dict_normalized_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
-        diff1_mean = np.nanmean(diff1)
-        diff2_mean = np.nanmean(diff2)        
-        diff1_std  = np.nanstd(diff1)
-        diff2_std  = np.nanstd(diff2)
-        
-        if diff1_mean > 0:
-            c1 = 'tab:cyan'
-        else:
-            c1 = 'gray'
-        if diff2_mean > 0:
-            c2 = 'tab:cyan'
-        else:
-            c2 = 'gray'            
-        
-        ax1 = fig.add_subplot(gs[i2, i1])
-        # Bar: mean
-        plt.bar(
-            [0,1],
-            [diff1_mean,diff2_mean],
-            width=bar_width,
-            color=[c1,c2],
-            edgecolor=[c1,c2],
-            zorder=1,
-            alpha=0.5
-        )
-        # Scatter with horizontal jitter
-        jitter = 0.1 * (2 * np.random.rand(len(diff1)) - 1)
-        plt.scatter(
-            0 + jitter,
-            diff1,
-            s=12,
-            facecolors='none',
-            edgecolors=c1,
-            linewidths=0.5,
-            alpha=1
-        )    
-        plt.scatter(
-            1 + jitter,
-            diff2,
-            s=12,
-            facecolors='none',
-            edgecolors=c2,
-            linewidths=0.5,
-            alpha=1
-        )    
-        # Error bar (SEM)
-        plt.errorbar(
-            [0,1],
-            [diff1_mean,diff2_mean],
-            yerr=[diff1_std / np.sqrt(len(diff1)), diff2_std / np.sqrt(len(diff2))],
-            color='k',
-            capsize=8,
-            lw=1.5,
-            linestyle='none'
-        )
-        plt.xlim([-0.5,1.5])
-        # plt.ylim([-0.3,0.3])
-        # Titles
-        if i2 == 0:
-            ax1.set_title(titles1[i1], fontsize=12)
-        # Row labels
-        if i1 == 0:
-            ax1.set_ylabel(labels2[i2], fontsize=12)            
-        if i2 == 2:
-            ax1.set_xticks([0,1])
-            ax1.set_xticklabels([r'$P_2-P_1$', r'$A_2-A_1$'], rotation=45)
-        else:
-            ax1.set_xticks([0,1])
-            ax1.set_xticklabels([])
-plt.tight_layout()
-# plt.savefig(figpath + 'neuron_group_individuals_cross_context.pdf')
-
-
+plt.savefig(figpath + 'module_traces.pdf')
 
 
 #%%
@@ -779,7 +897,7 @@ for i1, k1 in enumerate(keys1):
                 ax.set_yticklabels([])
 
 fig.tight_layout()
-# plt.savefig(figpath + 'CDdotprod_within_context.pdf')
+plt.savefig(figpath + 'CDdotprod_within_context.pdf')
 
 
 
@@ -837,8 +955,66 @@ for i1, k1 in enumerate(keys1):
                 ax.set_yticklabels([])
 
 fig.tight_layout()
-# plt.savefig(figpath + 'CDdotprod_across_context.pdf')
+plt.savefig(figpath + 'CDdotprod_across_context.pdf')
 
+
+
+
+####### CD dot product: across context and trial ########
+
+fig = plt.figure(figsize=(10, 6))
+
+# 3 x 3 groups
+outer = fig.add_gridspec(3, 3, wspace=0.35, hspace=0.4)
+
+for i1, k1 in enumerate(keys1):
+    for i2, k2 in enumerate(keys2):
+
+        # two contexts placed close together
+        inner = outer[i2, i1].subgridspec(1, 2, wspace=0.08)
+
+        y1 = dict_across_context_and_trial_activity[k1][k2]['P2-P1']
+        y2 = dict_across_context_and_trial_activity[k1][k2]['A2-A1']
+
+        # common y range for direct comparison
+        ymin = np.nanmin([np.nanmin(y1), np.nanmin(y2)]) - 0.05
+        ymax = np.nanmax([np.nanmax(y1), np.nanmax(y2)]) + 0.05
+
+        for ic, kc in enumerate(keys_across_context):
+
+            ax = fig.add_subplot(inner[0, ic])
+            ax.spines[['top', 'right']].set_visible(False)
+            y = dict_across_context_and_trial_activity[k1][k2][kc]
+            ax.axhline(0,color='gray',linestyle='--')
+            ax.scatter(
+                CDdotproduct,
+                y,
+                facecolor='none',
+                edgecolors='k'
+            )
+
+            _cor = np.corrcoef(CDdotproduct, y)[0, 1]
+
+            ax.set_ylim([ymin, ymax])
+            
+
+            if ic == 0:
+                ax.set_title(
+                    r'$r=$' + str(np.round(_cor, 3)),
+                    fontsize=9
+                )
+                None
+            else:
+                ax.set_title(
+                    r'$r=$' + str(np.round(_cor, 3)),
+                    fontsize=9
+                )
+
+                # remove duplicate y labels/ticks
+                ax.set_yticklabels([])
+
+fig.tight_layout()
+plt.savefig(figpath + 'CDdotprod_across_context_and_trial.pdf')
 
 
 

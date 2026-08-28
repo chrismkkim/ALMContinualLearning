@@ -163,7 +163,7 @@ def create_dict_module_activity(nfile, dict_topcells_1x2, fit_summary, modelfit,
                 for k3 in keys3:
                     _data_k3 = modelfit[f'sess{fx}'][k3]['data'][nonoutlier,:]
                     if len(_topcells_1x2) > 0:
-                        _data_k3_module = np.sum(_data_k3[_topcells_1x2],axis=0)
+                        _data_k3_module = np.mean(_data_k3[_topcells_1x2],axis=0)
                     else:
                         _data_k3_module = np.zeros(_data_k3.shape[1])
                     dict_module_activity[k1][k2][k3][fx] = _data_k3_module
@@ -355,3 +355,34 @@ def create_dict_across_activity(nfile, dict_module_activity, tix_delay_range, ke
     
     return dict_across_activity
 
+
+
+def create_dict_across_context_and_trial_activity(nfile, dict_module_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context):        
+        
+    dict_trialtypes = {
+        'P2-P1': np.zeros(nfile),
+        'A2-A1': np.zeros(nfile),
+    }
+    dict_topcells_2 = {
+        'P2+A2-': copy.deepcopy(dict_trialtypes),
+        'P2+A2+': copy.deepcopy(dict_trialtypes),
+        'P2-A2+': copy.deepcopy(dict_trialtypes)
+    }
+    dict_across_context_and_trial_activity = {
+        'P1+A1-': copy.deepcopy(dict_topcells_2),
+        'P1+A1+': copy.deepcopy(dict_topcells_2),
+        'P1-A1+': copy.deepcopy(dict_topcells_2),
+    }
+    
+    for k1 in keys1:
+        for k2 in keys2:
+            for kc in keys_across_context:
+                for fx in range(nfile):
+                    if kc == 'P2-P1':
+                        _act  = dict_module_activity[k1][k2]['P2'][fx] - dict_module_activity[k1][k2]['A1'][fx]
+                    if kc == 'A2-A1':
+                        _act  = dict_module_activity[k1][k2]['A2'][fx] - dict_module_activity[k1][k2]['P1'][fx]
+                    _act = _act[tix_delay_range]
+                    dict_across_context_and_trial_activity[k1][k2][kc][fx] = np.mean(_act)
+    
+    return dict_across_context_and_trial_activity
