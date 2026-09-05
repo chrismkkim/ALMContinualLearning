@@ -17,33 +17,41 @@ class ModulePlots:
         self,
         figpath,
         nfile,
-        fit_summary,
+        data_nonoutlier,
         dict_topcells_1x2,
         CDdotproduct,
         dict_CDdp_err,
         dict_module_activity,
-        tix_delay_range,
+        tix_late_delay,
         sequential_P1,
         sequential_A1,
         sequential_P2,
         sequential_A2,
         dict_within_selectivity,
+        dict_within_selectivity_neurons,
         dict_across_activity,
+        dict_across_activity_neurons,
         dict_across_context_and_trial_activity,
         keys_within_context,
         keys_across_context,
-        keys1=None,
-        keys2=None,
+        keys1,
+        keys2,
     ):
 
         self.figpath = figpath
         self.nfile = nfile
-        self.fit_summary = fit_summary
+        self.data_nonoutlier = data_nonoutlier
+        # self.multi_data_nonoutlier = multi_data_nonoutlier
+        # self.multi_CDdotproduct = multi_CDdotproduct
+        # self.multi_module_activity = multi_module_activity
+        # self.multi_within_selectivity = multi_within_selectivity
+        # self.multi_across_activity = multi_across_activity
+        
         self.dict_topcells_1x2 = dict_topcells_1x2
         self.CDdotproduct = CDdotproduct
         self.dict_CDdp_err = dict_CDdp_err
         self.dict_module_activity = dict_module_activity
-        self.tix_delay_range = tix_delay_range
+        self.tix_late_delay = tix_late_delay
 
         self.sequential_P1 = sequential_P1
         self.sequential_A1 = sequential_A1
@@ -53,6 +61,10 @@ class ModulePlots:
         self.dict_within_selectivity = dict_within_selectivity
         self.dict_across_activity = dict_across_activity
         self.dict_across_context_and_trial_activity = dict_across_context_and_trial_activity
+
+        self.dict_within_selectivity_neurons = dict_within_selectivity_neurons
+        self.dict_across_activity_neurons = dict_across_activity_neurons
+
 
         self.keys_within_context = keys_within_context
         self.keys_across_context = keys_across_context
@@ -75,7 +87,7 @@ class ModulePlots:
 
         figpath = self.figpath
         nfile = self.nfile
-        fit_summary = self.fit_summary
+        data_nonoutlier = self.data_nonoutlier
         dict_topcells_1x2 = self.dict_topcells_1x2
         CDdotproduct = self.CDdotproduct
         keys1 = self.keys1
@@ -98,8 +110,7 @@ class ModulePlots:
                 frac_cells = np.zeros(nfile)
 
                 for fx in range(nfile):
-                    nonoutlier = fit_summary['nonoutlier'][fx]
-                    ntotal_cells = len(nonoutlier)
+                    ntotal_cells = data_nonoutlier[fx]['P1'].shape[0]
 
                     frac_cells[fx] = (
                         len(dict_topcells_1x2[fx][key1][key2])
@@ -170,8 +181,7 @@ class ModulePlots:
 
         for fx in range(nfile):
 
-            nonoutlier = fit_summary['nonoutlier'][fx]
-            ntotal_cells = len(nonoutlier)
+            ntotal_cells = data_nonoutlier[fx]['P1'].shape[0]
 
             for i2, key2 in enumerate(keys2):
                 for i1, key1 in enumerate(keys1):
@@ -284,13 +294,13 @@ class ModulePlots:
 
         plt.scatter(
             CDdotproduct,
-            total_number_cells,
+            total_frac_cells,
             fc='None',
             ec='k'
         )
 
         plt.xlabel('CD dot product')
-        plt.ylabel('# of neurons')
+        plt.ylabel('frac of neurons')
 
         plt.gca().spines[['top', 'right']].set_visible(False)
 
@@ -316,7 +326,7 @@ class ModulePlots:
 
         figpath = self.figpath
         dict_CDdp_err = self.dict_CDdp_err
-
+        
         plt.figure(figsize=(8, 4))
 
         keys = list(dict_CDdp_err.keys())
@@ -411,10 +421,13 @@ class ModulePlots:
 
         figpath = self.figpath
         dict_module_activity = self.dict_module_activity
-        tix_delay_range = self.tix_delay_range
+        data_nonoutlier = self.data_nonoutlier
+        tix_late_delay = self.tix_late_delay
         keys1 = self.keys1
         keys2 = self.keys2
-
+        keys_within_context = self.keys_within_context 
+        nfile = self.nfile
+        
         bar_width = 0.6
 
         titles1 = [
@@ -445,17 +458,16 @@ class ModulePlots:
         for i2, key2 in enumerate(keys2):
             for i1, key1 in enumerate(keys1):
 
-                diff1 = np.nanmean(
-                    dict_module_activity[key1][key2]['P1'][:, tix_delay_range]
-                    - dict_module_activity[key1][key2]['A1'][:, tix_delay_range],
-                    axis=1
-                )
-
-                diff2 = np.nanmean(
-                    dict_module_activity[key1][key2]['P2'][:, tix_delay_range]
-                    - dict_module_activity[key1][key2]['A2'][:, tix_delay_range],
-                    axis=1
-                )
+                diff1 = np.stack([
+                    0 if len(self.dict_topcells_1x2[fx][key1][key2]) == 0 else
+                    np.mean((data_nonoutlier[fx]['P1'] - data_nonoutlier[fx]['A1'])[self.dict_topcells_1x2[fx][key1][key2]][:,tix_late_delay])
+                    for fx in range(nfile)
+                ])
+                diff2 = np.stack([
+                    0 if len(self.dict_topcells_1x2[fx][key1][key2]) == 0 else
+                    np.mean((data_nonoutlier[fx]['P2'] - data_nonoutlier[fx]['A2'])[self.dict_topcells_1x2[fx][key1][key2]][:,tix_late_delay])
+                    for fx in range(nfile)
+                ])
 
                 diff1_mean = np.nanmean(diff1)
                 diff2_mean = np.nanmean(diff2)
@@ -464,7 +476,7 @@ class ModulePlots:
                 diff2_std = np.nanstd(diff2)
 
                 ymax = np.max(np.concatenate((diff1, diff2))) + 0.02
-                ymin = np.min(np.concatenate((diff1, diff2))) - 0.02
+                ymin = np.min(np.concatenate((diff1, diff2))) - 0.02                
 
                 if diff1_mean > 0:
                     c1 = 'purple'
@@ -563,17 +575,16 @@ class ModulePlots:
         for i2, key2 in enumerate(keys2):
             for i1, key1 in enumerate(keys1):
 
-                diff1 = np.nanmean(
-                    dict_module_activity[key1][key2]['P2'][:, tix_delay_range]
-                    - dict_module_activity[key1][key2]['P1'][:, tix_delay_range],
-                    axis=1
-                )
-
-                diff2 = np.nanmean(
-                    dict_module_activity[key1][key2]['A2'][:, tix_delay_range]
-                    - dict_module_activity[key1][key2]['A1'][:, tix_delay_range],
-                    axis=1
-                )
+                diff1 = np.stack([
+                    0 if len(self.dict_topcells_1x2[fx][key1][key2]) == 0 else
+                    np.mean((data_nonoutlier[fx]['P2'] - data_nonoutlier[fx]['P1'])[self.dict_topcells_1x2[fx][key1][key2]][:,tix_late_delay])
+                    for fx in range(nfile)
+                ])
+                diff2 = np.stack([
+                    0 if len(self.dict_topcells_1x2[fx][key1][key2]) == 0 else
+                    np.mean((data_nonoutlier[fx]['A2'] - data_nonoutlier[fx]['A1'])[self.dict_topcells_1x2[fx][key1][key2]][:,tix_late_delay])
+                    for fx in range(nfile)
+                ])
 
                 diff1_mean = np.nanmean(diff1)
                 diff2_mean = np.nanmean(diff2)
@@ -666,122 +677,122 @@ class ModulePlots:
             plt.savefig(figpath + 'module_cross_context.pdf')
 
 
-        # ----------------------------------------------------------
-        # across context and trial
-        # ----------------------------------------------------------
+        # # ----------------------------------------------------------
+        # # across context and trial
+        # # ----------------------------------------------------------
 
-        fig = plt.figure(figsize=(6, 6))
+        # fig = plt.figure(figsize=(6, 6))
 
-        gs = fig.add_gridspec(
-            3, 3,
-            hspace=0.3,
-            wspace=0.5
-        )
+        # gs = fig.add_gridspec(
+        #     3, 3,
+        #     hspace=0.3,
+        #     wspace=0.5
+        # )
 
-        for i2, key2 in enumerate(keys2):
-            for i1, key1 in enumerate(keys1):
+        # for i2, key2 in enumerate(keys2):
+        #     for i1, key1 in enumerate(keys1):
 
-                diff1 = np.nanmean(
-                    dict_module_activity[key1][key2]['P2'][:, tix_delay_range]
-                    - dict_module_activity[key1][key2]['A1'][:, tix_delay_range],
-                    axis=1
-                )
+        #         diff1 = np.nanmean(
+        #             dict_module_activity[key1][key2]['P2'][:, tix_late_delay]
+        #             - dict_module_activity[key1][key2]['A1'][:, tix_late_delay],
+        #             axis=1
+        #         )
 
-                diff2 = np.nanmean(
-                    dict_module_activity[key1][key2]['A2'][:, tix_delay_range]
-                    - dict_module_activity[key1][key2]['P1'][:, tix_delay_range],
-                    axis=1
-                )
+        #         diff2 = np.nanmean(
+        #             dict_module_activity[key1][key2]['A2'][:, tix_late_delay]
+        #             - dict_module_activity[key1][key2]['P1'][:, tix_late_delay],
+        #             axis=1
+        #         )
 
-                diff1_mean = np.nanmean(diff1)
-                diff2_mean = np.nanmean(diff2)
+        #         diff1_mean = np.nanmean(diff1)
+        #         diff2_mean = np.nanmean(diff2)
 
-                diff1_std = np.nanstd(diff1)
-                diff2_std = np.nanstd(diff2)
+        #         diff1_std = np.nanstd(diff1)
+        #         diff2_std = np.nanstd(diff2)
 
-                ymax = np.max(np.concatenate((diff1, diff2))) + 0.02
-                ymin = np.min(np.concatenate((diff1, diff2))) - 0.02
+        #         ymax = np.max(np.concatenate((diff1, diff2))) + 0.02
+        #         ymin = np.min(np.concatenate((diff1, diff2))) - 0.02
 
-                if diff1_mean > 0:
-                    c1 = 'tab:olive'
-                else:
-                    c1 = 'gray'
+        #         if diff1_mean > 0:
+        #             c1 = 'tab:olive'
+        #         else:
+        #             c1 = 'gray'
 
-                if diff2_mean > 0:
-                    c2 = 'tab:olive'
-                else:
-                    c2 = 'gray'
+        #         if diff2_mean > 0:
+        #             c2 = 'tab:olive'
+        #         else:
+        #             c2 = 'gray'
 
-                ax1 = fig.add_subplot(gs[i2, i1])
+        #         ax1 = fig.add_subplot(gs[i2, i1])
 
-                plt.bar(
-                    [0, 1],
-                    [diff1_mean, diff2_mean],
-                    width=bar_width,
-                    color=[c1, c2],
-                    edgecolor=[c1, c2],
-                    zorder=1,
-                    alpha=0.5
-                )
+        #         plt.bar(
+        #             [0, 1],
+        #             [diff1_mean, diff2_mean],
+        #             width=bar_width,
+        #             color=[c1, c2],
+        #             edgecolor=[c1, c2],
+        #             zorder=1,
+        #             alpha=0.5
+        #         )
 
-                jitter = 0.1 * (2 * np.random.rand(len(diff1)) - 1)
+        #         jitter = 0.1 * (2 * np.random.rand(len(diff1)) - 1)
 
-                plt.scatter(
-                    0 + jitter,
-                    diff1,
-                    s=12,
-                    facecolors='none',
-                    edgecolors=c1,
-                    linewidths=0.5,
-                    alpha=1
-                )
+        #         plt.scatter(
+        #             0 + jitter,
+        #             diff1,
+        #             s=12,
+        #             facecolors='none',
+        #             edgecolors=c1,
+        #             linewidths=0.5,
+        #             alpha=1
+        #         )
 
-                plt.scatter(
-                    1 + jitter,
-                    diff2,
-                    s=12,
-                    facecolors='none',
-                    edgecolors=c2,
-                    linewidths=0.5,
-                    alpha=1
-                )
+        #         plt.scatter(
+        #             1 + jitter,
+        #             diff2,
+        #             s=12,
+        #             facecolors='none',
+        #             edgecolors=c2,
+        #             linewidths=0.5,
+        #             alpha=1
+        #         )
 
-                plt.errorbar(
-                    [0, 1],
-                    [diff1_mean, diff2_mean],
-                    yerr=[
-                        diff1_std / np.sqrt(len(diff1)),
-                        diff2_std / np.sqrt(len(diff2))
-                    ],
-                    color='k',
-                    capsize=8,
-                    lw=1.5,
-                    linestyle='none'
-                )
+        #         plt.errorbar(
+        #             [0, 1],
+        #             [diff1_mean, diff2_mean],
+        #             yerr=[
+        #                 diff1_std / np.sqrt(len(diff1)),
+        #                 diff2_std / np.sqrt(len(diff2))
+        #             ],
+        #             color='k',
+        #             capsize=8,
+        #             lw=1.5,
+        #             linestyle='none'
+        #         )
 
-                plt.xlim([-0.5, 1.5])
-                plt.ylim([ymin, ymax])
+        #         plt.xlim([-0.5, 1.5])
+        #         plt.ylim([ymin, ymax])
 
-                if i2 == 0:
-                    ax1.set_title(titles1[i1], fontsize=12)
+        #         if i2 == 0:
+        #             ax1.set_title(titles1[i1], fontsize=12)
 
-                if i1 == 0:
-                    ax1.set_ylabel(labels2[i2], fontsize=12)
+        #         if i1 == 0:
+        #             ax1.set_ylabel(labels2[i2], fontsize=12)
 
-                if i2 == 2:
-                    ax1.set_xticks([0, 1])
-                    ax1.set_xticklabels(
-                        [r'$P_2-A_1$', r'$A_2-P_1$'],
-                        rotation=45
-                    )
-                else:
-                    ax1.set_xticks([0, 1])
-                    ax1.set_xticklabels([])
+        #         if i2 == 2:
+        #             ax1.set_xticks([0, 1])
+        #             ax1.set_xticklabels(
+        #                 [r'$P_2-A_1$', r'$A_2-P_1$'],
+        #                 rotation=45
+        #             )
+        #         else:
+        #             ax1.set_xticks([0, 1])
+        #             ax1.set_xticklabels([])
 
-        plt.tight_layout()
+        # plt.tight_layout()
 
-        if savefig:
-            plt.savefig(figpath + 'module_cross_context_and_trial.pdf')
+        # if savefig:
+        #     plt.savefig(figpath + 'module_cross_context_and_trial.pdf')
 
 
         # ----------------------------------------------------------
@@ -801,26 +812,30 @@ class ModulePlots:
 
                 ax1 = fig.add_subplot(gs[2 * i2, i1])
 
-                ax1.plot(
+                activity_all_P1 = np.stack([
                     np.nanmean(
-                        dict_module_activity[key1][key2]['P1'],
+                        data_nonoutlier[fx]['P1'][self.dict_topcells_1x2[fx][key1][key2], :],
                         axis=0
-                    ),
-                    c='purple'
-                )
-
-                ax1.plot(
+                    )
+                    for fx in range(nfile)
+                ])
+                activity_all_A1 = np.stack([
                     np.nanmean(
-                        dict_module_activity[key1][key2]['A1'],
+                        data_nonoutlier[fx]['A1'][self.dict_topcells_1x2[fx][key1][key2], :],
                         axis=0
-                    ),
-                    c='limegreen'
-                )
+                    )
+                    for fx in range(nfile)
+                ])                
+                mean_activity_P1 = np.nanmean(activity_all_P1, axis=0)
+                mean_activity_A1 = np.nanmean(activity_all_A1, axis=0)
+                
+                ax1.plot(mean_activity_P1,c='purple')
+                ax1.plot(mean_activity_A1,c='limegreen')
 
                 ax1.axvline(7, color='gray', linestyle='--')
                 ax1.axvline(15, color='gray', linestyle='--')
 
-                ax1.set_ylim([0, 0.3])
+                # ax1.set_ylim([0, 0.3])
                 ax1.set_xticklabels([])
 
                 ax2 = fig.add_subplot(
@@ -828,28 +843,31 @@ class ModulePlots:
                     sharex=ax1
                 )
 
-                ax2.plot(
-                    np.nanmean(
-                        dict_module_activity[key1][key2]['P2'],
-                        axis=0
-                    ),
-                    c='purple',
-                    linestyle='--'
-                )
 
-                ax2.plot(
+                activity_all_P2 = np.stack([
                     np.nanmean(
-                        dict_module_activity[key1][key2]['A2'],
+                        data_nonoutlier[fx]['P2'][self.dict_topcells_1x2[fx][key1][key2], :],
                         axis=0
-                    ),
-                    c='limegreen',
-                    linestyle='--'
-                )
+                    )
+                    for fx in range(nfile)
+                ])
+                activity_all_A2 = np.stack([
+                    np.nanmean(
+                        data_nonoutlier[fx]['A2'][self.dict_topcells_1x2[fx][key1][key2], :],
+                        axis=0
+                    )
+                    for fx in range(nfile)
+                ])                
+                mean_activity_P2 = np.nanmean(activity_all_P2, axis=0)
+                mean_activity_A2 = np.nanmean(activity_all_A2, axis=0)
+                
+                ax2.plot(mean_activity_P2,c='purple',linestyle='--')
+                ax2.plot(mean_activity_A2,c='limegreen',linestyle='--')                
 
                 ax2.axvline(7, color='gray', linestyle='--')
                 ax2.axvline(15, color='gray', linestyle='--')
 
-                ax2.set_ylim([0, 0.3])
+                # ax2.set_ylim([0, 0.3])
 
                 if i2 == 0:
                     ax1.set_title(
@@ -880,6 +898,188 @@ class ModulePlots:
 
         if savefig:
             plt.savefig(figpath + 'module_traces.pdf')
+
+
+        # # ----------------------------------------------------------
+        # # module heatmaps (P1-A1, P2-A2)
+        # # ----------------------------------------------------------
+
+        # nfile = len(data_nonoutlier.keys())
+        # y1save = np.zeros((3,3,nfile))
+        # y2save = np.zeros((3,3,nfile))
+        # for fx in range(nfile):
+                
+        #     fig = plt.figure(figsize=(10, 6))
+
+        #     outer = fig.add_gridspec(
+        #         3, 3,
+        #         wspace=0.35,
+        #         hspace=0.4
+        #     )
+        
+        #     for i1, k1 in enumerate(keys1):
+        #         for i2, k2 in enumerate(keys2):
+
+        #             inner = outer[i2, i1].subgridspec(
+        #                 1, 2,
+        #                 wspace=0.08
+        #             )
+
+        #             y1 = (data_nonoutlier[fx]['P1'] - data_nonoutlier[fx]['A1'])[self.dict_topcells_1x2[fx][k1][k2],:]
+        #             y2 = (data_nonoutlier[fx]['P2'] - data_nonoutlier[fx]['A2'])[self.dict_topcells_1x2[fx][k1][k2],:]                    
+        #             y1_sorted = np.argsort(np.argmax(y1,axis=1))
+                    
+        #             for ic, kc in enumerate(keys_within_context):
+
+        #                 ax = fig.add_subplot(inner[0, ic])
+
+        #                 ax.spines[
+        #                     ['top', 'right']
+        #                 ].set_visible(False)
+
+        #                 if ic == 0:
+        #                     plt.imshow(y1[y1_sorted,:],cmap='PiYG_r',aspect='auto',vmin=-0.2,vmax=0.2,interpolation='None')
+        #                     plt.axvline(8,color='k',linestyle='--',lw=0.5)
+        #                     plt.axvline(16,color='k',linestyle='--',lw=0.5)
+        #                     plt.annotate(str(np.round(np.mean(y1[:,tix_late_delay]),decimals=3)),xy=(0.5,0.8),xycoords='axes fraction')
+        #                 if ic == 1:
+        #                     plt.imshow(y2[y1_sorted,:],cmap='PiYG_r',aspect='auto',vmin=-0.2,vmax=0.2,interpolation='None')
+        #                     plt.axvline(8,color='k',linestyle='--',lw=0.5)
+        #                     plt.axvline(16,color='k',linestyle='--',lw=0.5)
+        #                     plt.annotate(str(np.round(np.mean(y2[:,tix_late_delay]),decimals=3)),xy=(0.5,0.8),xycoords='axes fraction')
+        #                     ax.set_yticklabels([])                            
+        #                 if i2 == 0 and ic == 0:
+        #                     ax.set_title(
+        #                         titles1[i1],
+        #                         fontsize=12
+        #                     )
+
+        #                 if i1 == 0 and ic == 0:
+        #                     ax.set_ylabel(
+        #                         labels2[i2],
+        #                         fontsize=12
+        #                     )                            
+                            
+        #                 if ic == 0:
+        #                     y1save[i2,i1,fx] = np.mean(y1[:,tix_late_delay])
+        #                 elif ic == 1:
+        #                     y2save[i2,i1,fx] = np.mean(y2[:,tix_late_delay])
+
+        #     fig.tight_layout()
+
+        #     if savefig:
+        #         plt.savefig(figpath + 'module_heatmaps/selectivity/' f'module_heatmaps_{fx}.png',dpi=600)
+        #         plt.close()
+
+        #     # module selectivity
+        #     plt.figure(figsize=(6,6))
+        #     for i1 in range(3):
+        #         for i2 in range(3):
+        #             plt.subplot(3,3,3*i2+i1+1)
+                                        
+        #             jitter = 0.1 * (2 * np.random.rand(len(diff1)) - 1)
+
+        #             plt.scatter(
+        #                 0 + jitter,
+        #                 y1save[i2,i1],
+        #                 s=12,
+        #                 facecolors='none',
+        #                 edgecolors='k',
+        #                 linewidths=0.5,
+        #                 alpha=1
+        #             )
+
+        #             plt.scatter(
+        #                 1 + jitter,
+        #                 y2save[i2,i1],
+        #                 s=12,
+        #                 facecolors='none',
+        #                 edgecolors='k',
+        #                 linewidths=0.5,
+        #                 alpha=1
+        #             )
+        #             plt.axhline(0,color='gray',linestyle='--')
+        #     plt.tight_layout()
+            
+        #     if savefig:
+        #         plt.savefig(figpath + 'module_heatmaps/selectivity/module_selectivity.pdf')
+        #         plt.close()
+
+
+
+
+        # ----------------------------------------------------------
+        # module heatmaps (P1,A1,P2,A2)
+        # ----------------------------------------------------------
+
+        nfile = len(data_nonoutlier.keys())
+        
+        for fx in range(nfile):
+                
+            for i3, k3 in enumerate(['P1A1','P2A2']):
+                    
+                fig = plt.figure(figsize=(10, 6))
+
+                outer = fig.add_gridspec(
+                    3, 3,
+                    wspace=0.35,
+                    hspace=0.4
+                )
+            
+                for i1, k1 in enumerate(keys1):
+                    for i2, k2 in enumerate(keys2):
+
+                        inner = outer[i2, i1].subgridspec(
+                            1, 2,
+                            wspace=0.08
+                        )
+
+                        if k3 == 'P1A1':
+                            y1 = data_nonoutlier[fx]['P1'][self.dict_topcells_1x2[fx][k1][k2],:]
+                            y2 = data_nonoutlier[fx]['A1'][self.dict_topcells_1x2[fx][k1][k2],:]                    
+                        elif k3 == 'P2A2':
+                            y1 = data_nonoutlier[fx]['P2'][self.dict_topcells_1x2[fx][k1][k2],:]
+                            y2 = data_nonoutlier[fx]['A2'][self.dict_topcells_1x2[fx][k1][k2],:]                    
+                        sorted1 = np.argsort(np.argmax(y1,axis=1))
+                        sorted2 = np.argsort(np.argmax(y2,axis=1))
+                            
+                        
+                        for ic, kc in enumerate(keys_within_context):
+
+                            ax = fig.add_subplot(inner[0, ic])
+
+                            ax.spines[
+                                ['top', 'right']
+                            ].set_visible(False)
+
+                            if ic == 0:
+                                plt.imshow(y1[sorted1,:],cmap='jet',aspect='auto',vmin=0,vmax=0.2,interpolation='None')
+                                plt.axvline(8,color='w',linestyle='--',lw=0.5)
+                                plt.axvline(16,color='w',linestyle='--',lw=0.5)
+                            if ic == 1:
+                                plt.imshow(y2[sorted1,:],cmap='jet',aspect='auto',vmin=0,vmax=0.2,interpolation='None')
+                                plt.axvline(8,color='w',linestyle='--',lw=0.5)
+                                plt.axvline(16,color='w',linestyle='--',lw=0.5)
+                                ax.set_yticklabels([])                            
+                            if i2 == 0 and ic == 0:
+                                ax.set_title(
+                                    titles1[i1],
+                                    fontsize=12
+                                )
+
+                            if i1 == 0 and ic == 0:
+                                ax.set_ylabel(
+                                    labels2[i2],
+                                    fontsize=12
+                                )                            
+
+                fig.tight_layout()
+
+                if savefig:
+                    dirpath = figpath + f'module_heatmaps/trials/{fx}/'
+                    os.makedirs(dirpath, exist_ok=True)
+                    plt.savefig(dirpath + k3 + f'_module_heatmaps_{fx}.png',dpi=600)
+                    plt.close()
 
 
     # ==============================================================
@@ -1049,14 +1249,20 @@ class ModulePlots:
         CDdotproduct = self.CDdotproduct
         keys1 = self.keys1
         keys2 = self.keys2
+        keys_within_context = self.keys_within_context
+        keys_across_context = self.keys_across_context
 
         dict_within_selectivity = self.dict_within_selectivity
         dict_across_activity = self.dict_across_activity
         dict_across_context_and_trial_activity = self.dict_across_context_and_trial_activity
 
-        keys_within_context = self.keys_within_context
-        keys_across_context = self.keys_across_context
+        dict_within_selectivity_neurons = self.dict_within_selectivity_neurons
+        dict_across_activity_neurons = self.dict_across_activity_neurons
 
+        # multipel datasets
+        multi_within_selectivity = self.multi_within_selectivity
+        multi_across_activity = self.multi_across_activity
+        multi_CDdotproduct = self.multi_CDdotproduct
 
         # ----------------------------------------------------------
         # within context
@@ -1213,7 +1419,7 @@ class ModulePlots:
 
 
         # ----------------------------------------------------------
-        # across context and trial
+        # within context (multiple datasets)
         # ----------------------------------------------------------
 
         fig = plt.figure(figsize=(10, 6))
@@ -1232,15 +1438,8 @@ class ModulePlots:
                     wspace=0.08
                 )
 
-                y1 = (
-                    dict_across_context_and_trial_activity
-                    [k1][k2]['P2-P1']
-                )
-
-                y2 = (
-                    dict_across_context_and_trial_activity
-                    [k1][k2]['A2-A1']
-                )
+                y1 = dict_within_selectivity[k1][k2]['P1-A1']
+                y2 = dict_within_selectivity[k1][k2]['P2-A2']
 
                 ymin = np.nanmin([
                     np.nanmin(y1),
@@ -1252,7 +1451,7 @@ class ModulePlots:
                     np.nanmax(y2)
                 ]) + 0.05
 
-                for ic, kc in enumerate(keys_across_context):
+                for ic, kc in enumerate(keys_within_context):
 
                     ax = fig.add_subplot(inner[0, ic])
 
@@ -1260,10 +1459,7 @@ class ModulePlots:
                         ['top', 'right']
                     ].set_visible(False)
 
-                    y = (
-                        dict_across_context_and_trial_activity
-                        [k1][k2][kc]
-                    )
+                    y = dict_within_selectivity[k1][k2][kc]
 
                     ax.axhline(
                         0,
@@ -1296,5 +1492,77 @@ class ModulePlots:
         fig.tight_layout()
 
         if savefig:
-            plt.savefig(figpath + 'CDdotprod_across_context_and_trial.pdf')
+            plt.savefig(figpath + 'CDdotprod_within_context.pdf')
 
+
+
+        # # ----------------------------------------------------------
+        # # within context (all neurons in the modules)
+        # # ----------------------------------------------------------
+
+        # nfile = 33
+        # nbins = 20
+        # within_selectivity_context1 = np.zeros((nfile,nbins))
+        # within_selectivity_context2 = np.zeros((nfile,nbins))
+
+        # within_selectivity_context1_avg = np.zeros(nfile)
+        # within_selectivity_context2_avg = np.zeros(nfile)
+        
+        # fig = plt.figure(figsize=(10, 6))
+
+        # outer = fig.add_gridspec(
+        #     3, 3,
+        #     wspace=0.35,
+        #     hspace=0.4
+        # )
+
+        # for i1, k1 in enumerate(keys1):
+        #     for i2, k2 in enumerate(keys2):
+
+        #         inner = outer[i2, i1].subgridspec(
+        #             1, 2,
+        #             wspace=0.08
+        #         )
+
+        #         for fx in range(nfile):
+        #             y1 = dict_within_selectivity_neurons[k1][k2]['P1-A1'][fx]
+        #             y2 = dict_within_selectivity_neurons[k1][k2]['P2-A2'][fx]
+        #             y1cnt, y1edg = np.histogram(y1,bins=nbins,range=(-0.2,0.2))
+        #             y2cnt, y2edg = np.histogram(y2,bins=nbins,range=(-0.2,0.2))
+        #             within_selectivity_context1[fx] = y1cnt
+        #             within_selectivity_context2[fx] = y2cnt
+
+        #             within_selectivity_context1_avg[fx] = np.mean(y1)
+        #             within_selectivity_context2_avg[fx] = np.mean(y2)            
+
+        #         for ic, kc in enumerate(keys_within_context):
+
+        #             ax = fig.add_subplot(inner[0, ic])
+
+        #             ax.spines[
+        #                 ['top', 'right']
+        #             ].set_visible(False)
+
+        #             if ic == 0:
+        #                 plt.imshow(within_selectivity_context1,cmap='jet',aspect='auto')
+        #                 # plt.plot(y1edg[:-1],np.mean(within_selectivity_context1,axis=0),c='k')
+        #                 # plt.hist(within_selectivity_context1_avg,bins=20,range=(-0.2,0.2),histtype='step')
+        #             if ic == 1:
+        #                 plt.imshow(within_selectivity_context2,cmap='jet',aspect='auto')
+        #                 # plt.plot(y1edg[:-1],np.mean(within_selectivity_context2,axis=0),c='k')
+        #                 # plt.hist(within_selectivity_context2_avg,bins=20,range=(-0.2,0.2),histtype='step')
+        #             plt.axvline(nbins//2,color='w',linestyle='--',lw=0.5)
+        #             # plt.axvline(y1edg[nbins//2],color='r',linestyle='--')
+
+        #             # ax.set_title(
+        #             #     r'$r=$' + str(np.round(_cor, 3)),
+        #             #     fontsize=9
+        #             # )
+
+        #             if ic == 1:
+        #                 ax.set_yticklabels([])
+
+        # fig.tight_layout()
+
+        # if savefig:
+        #     plt.savefig(figpath + 'CDdotprod_within_context_neurons.pdf')

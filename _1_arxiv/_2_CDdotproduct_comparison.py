@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
+#%%
 dirpath = '/Users/kimchm/Documents/KimNiNature2024/MatConverted2Python/' 
 metadata = pd.read_csv(dirpath + 'EDF10d_info_2026_01_16.csv')
 CDdotprod_python = pd.read_csv('CDdotprod_python_deconvolved.txt')
@@ -32,5 +33,5 @@ plt.scatter(jh_CDdotprod, my_CDdotprod, color='k')
 plt.xlabel('CD dot product (JH)')
 plt.ylabel('CD dot product (Chris)')
 plt.tight_layout()
-plt.savefig('figure/summary/CDdotprod_chris_jh.pdf')
+# plt.savefig('figure/summary/CDdotprod_chris_jh.pdf')
 

@@ -63,7 +63,97 @@ def create_plot_sf(cmap_type, sf):
     plot_sf = cmap(norm(sf_sum))
     plot_sf[sf_sum==0, 3] = 0
     return plot_sf    
-                        
+
+def gen_trialavg_neural_data(dirpath, par):
+    # trial-averaged neural data
+    data_trial = {'P1': np.array([]), 'A1': np.array([]), 'P2': np.array([]),'A2': np.array([])}
+    data_all = {fx: copy.deepcopy(data_trial) for fx in range(par.nfile)}
+    for fx in range(par.nfile):
+        print(fx)    
+        # sorted by relearn speed 
+        fx_sorted = par.sorted_indices_by_relearn_speed[fx]
+        filepath   = dirpath + par.merged_ID[fx_sorted] + '.npy'
+        data       = np.load(filepath, allow_pickle=True)
+        data_type  = 'deconvolved'
+        # data_type  = 'dFF0'
+
+        # split data into two sets of trials
+        opto_1R_set1, opto_1L_set1, opto_2R_set1, opto_2L_set1, \
+        opto_1R_set2, opto_1L_set2, opto_2R_set2, opto_2L_set2 = split_trials(data, data_type)
+        # neural activity
+        opto_1R_avg_set1 = np.mean(opto_1R_set1,axis=2) # neurons x time x trials
+        opto_1L_avg_set1 = np.mean(opto_1L_set1,axis=2) # neurons x time x trials
+        opto_2R_avg_set1 = np.mean(opto_2R_set1,axis=2) # neurons x time x trials
+        opto_2L_avg_set1 = np.mean(opto_2L_set1,axis=2) # neurons x time x trials
+        # neural activity - outlier neurons removed
+        data_all[fx]['P1'] = opto_1R_avg_set1[:,par.tix_start:par.tix_end]
+        data_all[fx]['A1'] = opto_1L_avg_set1[:,par.tix_start:par.tix_end]
+        data_all[fx]['P2'] = opto_2L_avg_set1[:,par.tix_start:par.tix_end]
+        data_all[fx]['A2'] = opto_2R_avg_set1[:,par.tix_start:par.tix_end]
+    return data_all
+
+def gen_constrain_to_nonoutliers(par, data_all):
+    # contstrain the data to nonoutlier neurons
+    nonoutlier = {fx:np.array([]) for fx in range(par.nfile)}
+    for fx in range(par.nfile):    
+        sess = data_all[fx]
+        data = {act: sess[act] for act in par.acts}    
+        max_vals = [np.max(data[act], axis=1) for act in par.acts]
+        keep_nonoutliers = remove_outliers_alltrials_fixedtime(*max_vals, maxstd=5)
+        keep_nonzero = np.logical_or.reduce([np.sum(data[act], axis=1) > 0 for act in par.acts])
+        keep = keep_nonoutliers & keep_nonzero
+        nonoutlier[fx] = np.where(keep)[0]    
+        if np.any(~keep_nonzero) > 0:
+            print('-----')
+            print(fx)
+            print(np.where(~keep_nonzero==True))
+
+    data_trial = {'P1': np.array([]), 'A1': np.array([]), 'P2': np.array([]),'A2': np.array([])}
+    _data_nonoutlier = {fx: copy.deepcopy(data_trial) for fx in range(par.nfile)}
+    for fx in range(par.nfile):
+        for act in par.acts:
+            _data_nonoutlier[fx][act] = data_all[fx][act][nonoutlier[fx]]
+    return _data_nonoutlier
+    
+def gen_normalize_by_meanrate(par, _data_nonoutlier):
+    # get the mean rate of each context
+    meanrate_context1 = np.zeros(par.nfile)
+    meanrate_context2 = np.zeros(par.nfile)
+    for fx in range(par.nfile):
+        meanrate_context1[fx] = np.mean(np.concatenate((_data_nonoutlier[fx]['P1'][:,12:16],_data_nonoutlier[fx]['A1'][:,12:16])))
+        meanrate_context2[fx] = np.mean(np.concatenate((_data_nonoutlier[fx]['P2'][:,12:16],_data_nonoutlier[fx]['A2'][:,12:16])))
+    meanrate = np.mean(np.concatenate((meanrate_context1,meanrate_context2)))    
+
+    # normalize by mean rate
+    data_trial = {'P1': np.array([]), 'A1': np.array([]), 'P2': np.array([]),'A2': np.array([])}
+    data_nonoutlier = {fx: copy.deepcopy(data_trial) for fx in range(par.nfile)}
+    for fx in range(par.nfile):
+        for act in par.acts:
+            if act == 'P1' or act == 'A1':
+                data_nonoutlier[fx][act] = meanrate * _data_nonoutlier[fx][act] / meanrate_context1[fx]
+            if act == 'P2' or act == 'A2':
+                data_nonoutlier[fx][act] = meanrate * _data_nonoutlier[fx][act] / meanrate_context2[fx]
+    return data_nonoutlier
+
+def gen_topcells(thr_var, par, data_nonoutlier):    
+    dict_topcells_format = {
+        'topcells':                 {i:[] for i in range(par.nfile)},
+        'topcells_at_t':            {i:[] for i in range(par.nfile)},
+        'data_binary':              {i:[] for i in range(par.nfile)},
+    }
+    dict_topcells = {act: copy.deepcopy(dict_topcells_format) for act in par.acts}    
+    for act in par.acts:
+        for fx in range(par.nfile):
+            _data   = data_nonoutlier[fx][act]
+            _expvar_at_t_fx, _topcells_at_t_fx,  _newcells_at_t_fx, \
+            _data_binary_fx, _cells_sorted_at_t, _data_cumsum = create_binary_data(_data,thr_var)
+            _topcells_fx = np.unique(np.concatenate(list(_topcells_at_t_fx.values())))
+            dict_topcells[act]['topcells'][fx]               = _topcells_fx
+            dict_topcells[act]['topcells_at_t'][fx]          = _topcells_at_t_fx
+            dict_topcells[act]['data_binary'][fx]            = _data_binary_fx    
+    return dict_topcells
+
+
 def split_trials(data, data_type):
     
     tsample   = 1.57
@@ -125,30 +215,74 @@ def split_trials(data, data_type):
     opto_1R_testtrials  = opto_1R_alltrials[:,:,test_trials_1R]
     opto_1L_testtrials  = opto_1L_alltrials[:,:,test_trials_1L]
     opto_2R_testtrials  = opto_2R_alltrials[:,:,test_trials_2R]
-    opto_2L_testtrials  = opto_2L_alltrials[:,:,test_trials_2L]
-    
-    # Compute coding direction - use train trials
-    opto_1R = np.zeros((ncell,ntimestep))
-    opto_1L = np.zeros((ncell,ntimestep))
-    opto_2R = np.zeros((ncell,ntimestep))
-    opto_2L = np.zeros((ncell,ntimestep))    
-    for cell in range(ncell):        
-        # use train trials
-        opto_1R[cell] = np.mean(opto_1R_traintrials[cell,:,:],axis=1)
-        opto_1L[cell] = np.mean(opto_1L_traintrials[cell,:,:],axis=1)
-        opto_2R[cell] = np.mean(opto_2R_traintrials[cell,:,:],axis=1)
-        opto_2L[cell] = np.mean(opto_2L_traintrials[cell,:,:],axis=1)                    
-                
-    CD_sess1            = opto_1R - opto_1L
-    CD_sess2            = -(opto_2R - opto_2L)
-    CD_duration         = 4
-    CD_sess1_population = np.mean(CD_sess1[:,tix_response-CD_duration:tix_response], axis=1)
-    CD_sess2_population = np.mean(CD_sess2[:,tix_response-CD_duration:tix_response], axis=1)
-    CD_dotproduct       = np.inner(CD_sess1_population, CD_sess2_population) / (np.linalg.norm(CD_sess1_population) * np.linalg.norm(CD_sess2_population))
-
+    opto_2L_testtrials  = opto_2L_alltrials[:,:,test_trials_2L]    
 
     return (opto_1R_traintrials, opto_1L_traintrials, opto_2R_traintrials, opto_2L_traintrials,
             opto_1R_testtrials,  opto_1L_testtrials,  opto_2R_testtrials,  opto_2L_testtrials)
+    
+
+def compute_CD_dotproduct_compare_to_JH(data, data_type):
+    
+    tsample   = 1.57
+    tdelay    = 2.87
+    tresponse = 4.17
+    dt        = 1/6
+    ntimestep = 47
+    tvec      = dt * np.arange(ntimestep)
+    tix_delay    = np.where(tvec > tdelay)[0][0]
+    tix_response = np.where(tvec > tresponse)[0][0]
+
+    # organize neural data
+    opto_sess1 = data[data_type][0]
+    opto_sess2 = data[data_type][1]
+    ncat, ncell = opto_sess1.shape
+    lickright = 0
+    lickleft  = 1
+
+    ntrials_1R = opto_sess1[lickright,0].shape[1]
+    ntrials_1L = opto_sess1[lickleft,0].shape[1]
+    ntrials_2R = opto_sess2[lickright,0].shape[1]
+    ntrials_2L = opto_sess2[lickleft,0].shape[1]
+
+    opto_1R_alltrials = np.zeros((ncell,ntimestep,ntrials_1R))
+    opto_1L_alltrials = np.zeros((ncell,ntimestep,ntrials_1L))
+    opto_2R_alltrials = np.zeros((ncell,ntimestep,ntrials_2R))
+    opto_2L_alltrials = np.zeros((ncell,ntimestep,ntrials_2L))
+    for cell in range(ncell):
+        opto_1R_alltrials[cell] = opto_sess1[lickright,cell]
+        opto_1L_alltrials[cell] = opto_sess1[lickleft,cell]
+        opto_2R_alltrials[cell] = opto_sess2[lickright,cell]
+        opto_2L_alltrials[cell] = opto_sess2[lickleft,cell]
+            
+    # random trials        
+    frac_train_trials = 0.5
+    ntrials_1R_half = int(ntrials_1R * frac_train_trials)
+    ntrials_1L_half = int(ntrials_1L * frac_train_trials)
+    ntrials_2R_half = int(ntrials_2R * frac_train_trials)
+    ntrials_2L_half = int(ntrials_2L * frac_train_trials)
+
+    trials_1R, trials_1L, trials_2R, trials_2L = np.arange(ntrials_1R), np.arange(ntrials_1L), np.arange(ntrials_2R), np.arange(ntrials_2L)
+    random_trials_1R_half = np.sort(np.random.permutation(trials_1R)[:ntrials_1R_half])
+    random_trials_1L_half = np.sort(np.random.permutation(trials_1L)[:ntrials_1L_half])
+    random_trials_2R_half = np.sort(np.random.permutation(trials_2R)[:ntrials_2R_half])
+    random_trials_2L_half = np.sort(np.random.permutation(trials_2L)[:ntrials_2L_half])    
+
+    # trial-averaged activity
+    opto_1R_trialavg   = np.mean(opto_1R_alltrials[:,:,random_trials_1R_half],axis=2)
+    opto_1L_trialavg   = np.mean(opto_1L_alltrials[:,:,random_trials_1L_half],axis=2)
+    opto_2R_trialavg   = np.mean(opto_2R_alltrials[:,:,random_trials_2R_half],axis=2)
+    opto_2L_trialavg   = np.mean(opto_2L_alltrials[:,:,random_trials_2L_half],axis=2)
+                                    
+    # compute CD                                
+    CD_sess1            = opto_1R_trialavg - opto_1L_trialavg
+    CD_sess2            = opto_2R_trialavg - opto_2L_trialavg
+    CD_duration         = 4
+    CD_sess1_population = np.mean(CD_sess1[:,tix_response-CD_duration:tix_response], axis=1)
+    CD_sess2_population = np.mean(CD_sess2[:,tix_response-CD_duration:tix_response], axis=1)
+    CD_dotproduct       = np.inner(CD_sess1_population, CD_sess2_population) / (np.linalg.norm(CD_sess1_population) * np.linalg.norm(CD_sess2_population))                    
+    
+    return CD_dotproduct
+
     
 def compute_CD_dotproduct(opto_1R_set1,opto_1L_set1,opto_2R_set1,opto_2L_set1,tix_response):
     

@@ -81,25 +81,25 @@ for fx in range(nfile):
 
     # neural activity
     # trial set 1
-    opto_1R_delay_set1 = np.mean(opto_1R_set1,axis=2) # neurons x time x trials
-    opto_1L_delay_set1 = np.mean(opto_1L_set1,axis=2) # neurons x time x trials
-    opto_2R_delay_set1 = np.mean(opto_2R_set1,axis=2) # neurons x time x trials
-    opto_2L_delay_set1 = np.mean(opto_2L_set1,axis=2) # neurons x time x trials
+    opto_1R_avg_set1 = np.mean(opto_1R_set1,axis=2) # neurons x time x trials
+    opto_1L_avg_set1 = np.mean(opto_1L_set1,axis=2) # neurons x time x trials
+    opto_2R_avg_set1 = np.mean(opto_2R_set1,axis=2) # neurons x time x trials
+    opto_2L_avg_set1 = np.mean(opto_2L_set1,axis=2) # neurons x time x trials
     # trial set 2
-    opto_1R_delay_set2 = np.mean(opto_1R_set2,axis=2) # neurons x time x trials
-    opto_1L_delay_set2 = np.mean(opto_1L_set2,axis=2) # neurons x time x trials
-    opto_2R_delay_set2 = np.mean(opto_2R_set2,axis=2) # neurons x time x trials
-    opto_2L_delay_set2 = np.mean(opto_2L_set2,axis=2) # neurons x time x trials
+    opto_1R_avg_set2 = np.mean(opto_1R_set2,axis=2) # neurons x time x trials
+    opto_1L_avg_set2 = np.mean(opto_1L_set2,axis=2) # neurons x time x trials
+    opto_2R_avg_set2 = np.mean(opto_2R_set2,axis=2) # neurons x time x trials
+    opto_2L_avg_set2 = np.mean(opto_2L_set2,axis=2) # neurons x time x trials
     
     # neural activity - outlier neurons removed
-    P1_set1[fx] = opto_1R_delay_set1
-    A1_set1[fx] = opto_1L_delay_set1
-    P2_set1[fx] = opto_2L_delay_set1
-    A2_set1[fx] = opto_2R_delay_set1
-    P1_set2[fx] = opto_1R_delay_set2
-    A1_set2[fx] = opto_1L_delay_set2
-    P2_set2[fx] = opto_2L_delay_set2
-    A2_set2[fx] = opto_2R_delay_set2
+    P1_set1[fx] = opto_1R_avg_set1
+    A1_set1[fx] = opto_1L_avg_set1
+    P2_set1[fx] = opto_2L_avg_set1
+    A2_set1[fx] = opto_2R_avg_set1
+    P1_set2[fx] = opto_1R_avg_set2
+    A1_set2[fx] = opto_1L_avg_set2
+    P2_set2[fx] = opto_2L_avg_set2
+    A2_set2[fx] = opto_2R_avg_set2
     
     # CD dot product (use trial 2)
     CD_dotproduct[fx] = functions.compute_CD_dotproduct(opto_1R_set2,opto_1L_set2,opto_2R_set2,opto_2L_set2,tix_response)

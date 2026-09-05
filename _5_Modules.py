@@ -12,149 +12,137 @@ from sklearn.decomposition import PCA
 import copy
 import importlib
 from utils import functions, functions_xcontext
-from utils import plot_modules
+from utils import plot_modules, experiment_param
 
 
 # %%
 dirpath = '/Users/kimchm/Documents/KimNiNature2024/MatConverted2Python/' 
-metadata = pd.read_csv(dirpath + 'EDF10d_info_2026_01_16.csv')
-
-# Compare CD dot products of CK and JH
-metadata['Merged_ID'] = (
-    metadata['Mouse ID'].str.strip("'") + '_' + 
-    metadata['FOV'].str.strip("'") + '_' + 
-    metadata['Session1'].str.strip("'").str.replace("-", "_") + '_' + 
-    metadata['Session2'].str.strip("'").str.replace("-", "_")
-)
-cols = ['Merged_ID'] + [c for c in metadata.columns if c != 'Merged_ID']
-metadata = metadata[cols]
-    
-# merged id sorted by relearn speed
-merged_ID     = metadata['Merged_ID']
-# mouse group sorted by relearn speed
-mouse_group   = metadata['Mouse Group']
-# sort by relearns speed
-colname_relearn_speed = 'Relative trials to reach\n75% performance'
-relearn_time = metadata[colname_relearn_speed]
-sorted_indices_by_relearn_speed = np.argsort(relearn_time)
-
-tsample   = 1.57
-tdelay    = 2.87
-tresponse = 4.17
-dt        = 1/6
-ntimestep = 47
-tvec      = dt * np.arange(ntimestep)
-tix_sample   = np.where(tvec > tsample)[0][0]
-tix_delay    = np.where(tvec > tdelay)[0][0]
-tix_response = np.where(tvec > tresponse)[0][0]
-lickright    = 0
-lickleft     = 1
-
-nfile  = len(metadata)
-CD_dotproduct  = np.zeros(nfile)
-
-#%%
-#=======================#
-# Load the fitted model #
-#=======================#
-datapath = 'data/fit_neuron_activity/'
-modelfit = np.load(datapath + 'modelfit.npy', allow_pickle=True).item()
-
-#==========================================#
-# Collecte the fit summary of all sessions #
-#==========================================#
-acts = ['P1', 'A1', 'P2', 'A2']
-actidx = {'P1':0,'A1':1,'P2':2,'A2':3}
-nact = len(acts)
-
-fit_summary = functions.get_fit_summary(nfile, modelfit, acts)
-
-#%%
-dt = 1/6
-tix_start = tix_sample
-tix_end   = tix_response+8
-ntimestep_fit = tix_end - tix_start
-tstart = tvec[tix_start]
-tend   = tvec[tix_end]
-
-topcells_are_shuffled = False
-thr_var = 0.8
-t = tvec[tix_start:tix_end]
-tgo = t - tvec[tix_response]
-dt = t[1] - t[0]
-
-dict_topcells = functions.get_dict_topcells(acts, nfile, thr_var, modelfit, fit_summary)
-
-fit_summary_topcells = functions.get_fit_summary_topcells(t, nfile, acts, actidx, dict_topcells, fit_summary)
-
 figpath = 'figure/neural_dynamics/cross_context/'
 datapath = 'data/CDdotproduct/'
-CDdotproduct = np.load(datapath + 'CDdotproduct.npy')
 
-keys1 = ['P1+A1-', 'P1+A1+', 'P1-A1+']
-keys2 = ['P2+A2-', 'P2+A2+', 'P2-A2+']
-keys3 = ['P1','A1','P2','A2']
-keys_within_context = ['P1-A1','P2-A2']
-keys_across_context = ['P2-P1','A2-A1']
+par = experiment_param.ExperimentParam(dirpath)
 
 #%%
 
+# trial-averaged neural data
+data_all = functions.gen_trialavg_neural_data(dirpath, par)
+
+# contstrain the data to nonoutlier neurons
+_data_nonoutlier = functions.gen_constrain_to_nonoutliers(par, data_all)
+
+# normalize the mean rate
+data_nonoutlier = functions.gen_normalize_by_meanrate(par, _data_nonoutlier)
+
+# select top cells: 
+#   - set the threshold for variance
+thr_var = 0.9
+dict_topcells = functions.gen_topcells(thr_var, par, data_nonoutlier)
+
+
+#%%
 importlib.reload(functions_xcontext)
 
+tix_late_delay = np.arange(12,16)
+
+dict_topcells_1x2 = functions_xcontext.create_dict_topcells_1x2(par.nfile, dict_topcells, tix_late_delay)
+
+dict_CDdp, CDdotproduct, CDdp_1x2 = functions_xcontext.create_dict_CDdotprod(par.nfile, dict_topcells, dict_topcells_1x2, tix_late_delay, data_nonoutlier)
+
+dict_CDdp_err = functions_xcontext.create_dict_CDdotprod_err(par.nfile, dict_CDdp, CDdotproduct)
+
+dict_module_activity = functions_xcontext.create_dict_module_activity(par.nfile, dict_topcells_1x2, data_nonoutlier, par.keys1, par.keys2, par.keys3)
+dict_neuron_activity = functions_xcontext.create_dict_neuron_activity(par.nfile, dict_topcells_1x2, data_nonoutlier, par.keys1, par.keys2, par.keys3)
+
+sequential_P1, sequential_A1, sequential_P2, sequential_A2 = functions_xcontext.create_sequential_activity(par.nfile, dict_topcells_1x2, dict_topcells, data_nonoutlier, par.keys1, par.keys2)
+
+dict_within_selectivity         = functions_xcontext.create_dict_within_selectivity(par.nfile, dict_module_activity, tix_late_delay, par.keys1, par.keys2, par.keys_within_context, par.keys_across_context)
+dict_within_selectivity_neurons = functions_xcontext.create_dict_within_selectivity_neurons(par.nfile, dict_neuron_activity, tix_late_delay, par.keys1, par.keys2, par.keys_within_context, par.keys_across_context)
+
+dict_across_activity         = functions_xcontext.create_dict_across_activity(par.nfile, dict_module_activity, tix_late_delay, par.keys1, par.keys2, par.keys_within_context, par.keys_across_context)
+dict_across_activity_neurons = functions_xcontext.create_dict_across_activity_neurons(par.nfile, dict_neuron_activity, tix_late_delay, par.keys1, par.keys2, par.keys_within_context, par.keys_across_context)
+
+dict_across_context_and_trial_activity    = functions_xcontext.create_dict_across_context_and_trial_activity(par.nfile, dict_module_activity, tix_late_delay, par.keys1, par.keys2, par.keys_within_context, par.keys_across_context)
+
+#%%
+# generate lots of data by randomly sampling the trials
+ndata = 10
+multi_data_nonoutlier = {d:[] for d in range(ndata)}
+for d in range(ndata):
+    tmp_data_all         = functions.gen_trialavg_neural_data(dirpath, par)
+    _tmp_data_nonoutlier = functions.gen_constrain_to_nonoutliers(par, tmp_data_all)
+    tmp_data_nonoutlier  = functions.gen_normalize_by_meanrate(par, _tmp_data_nonoutlier)    
+    multi_data_nonoutlier[d] = tmp_data_nonoutlier
+
+
+# multiavg_data_nonoutlier = copy.deepcopy(data_nonoutlier)
+# for fx in range(par.nfile):
+#     for act in par.acts:
+#         multiavg_data_nonoutlier[fx][act] = np.mean(np.concatenate([multidata_nonoutlier[d][fx][act] for d in range(ndata)],axis=0),axis=0)
+
+# multi_CDdotproduct = np.zeros((ndata,par.nfile))
+# multi_module_activity = {d:[] for d in range(ndata)}
+# multi_within_selectivity = {d:[] for d in range(ndata)}
+# multi_across_activity = {d:[] for d in range(ndata)}
+# thr_var = 0.9
+# for d in range(ndata):
+#     _data_nonoutlier         = multidata_nonoutlier[d]
+#     _dict_topcells           = functions.gen_topcells(thr_var, par, _data_nonoutlier)    
+#     _dict_topcells_1x2       = functions_xcontext.create_dict_topcells_1x2(par.nfile, _dict_topcells, tix_late_delay)
+#     _, _CDdotproduct, _      = functions_xcontext.create_dict_CDdotprod(par.nfile, _dict_topcells, _dict_topcells_1x2, tix_late_delay, _data_nonoutlier)
+#     _dict_module_activity    = functions_xcontext.create_dict_module_activity(par.nfile, _dict_topcells_1x2, _data_nonoutlier, par.keys1, par.keys2, par.keys3)
+#     _dict_within_selectivity = functions_xcontext.create_dict_within_selectivity(par.nfile, _dict_module_activity, tix_late_delay, par.keys1, par.keys2, par.keys_within_context, par.keys_across_context)
+#     _dict_across_activity    = functions_xcontext.create_dict_across_activity(par.nfile, _dict_module_activity, tix_late_delay, par.keys1, par.keys2, par.keys_within_context, par.keys_across_context)
+
+#     multi_CDdotproduct[d] = _CDdotproduct
+#     multi_module_activity[d] = _dict_module_activity
+#     multi_within_selectivity[d] = _dict_within_selectivity
+#     multi_across_activity[d] = _dict_across_activity
+
+# multiavg_CDdotproduct = np.zeros(par.nfile)
+# multiavg_
+    
+
 #%%
 
-tix_delay_range = np.arange(12,16)
-
-dict_topcells_1x2 = functions_xcontext.create_dict_topcells_1x2(nfile, dict_topcells, tix_delay_range)
-
-dict_CDdp, CDdp, CDdp_1x2 = functions_xcontext.create_dict_CDdotprod(nfile, dict_topcells, dict_topcells_1x2, tix_delay_range, fit_summary, modelfit)
-
-dict_CDdp_err = functions_xcontext.create_dict_CDdotprod_err(nfile, dict_CDdp, CDdp)
-
-dict_module_activity = functions_xcontext.create_dict_module_activity(nfile, dict_topcells_1x2, fit_summary, modelfit, keys1, keys2, keys3)
-
-dict_normalized_activity = functions_xcontext.create_dict_normalized_activity(nfile, dict_module_activity, fit_summary, modelfit, dict_topcells_1x2, keys1, keys2, keys3)
-
-sequential_P1, sequential_A1, sequential_P2, sequential_A2 = functions_xcontext.create_sequential_activity(nfile, dict_topcells_1x2, dict_topcells, fit_summary, modelfit, keys1, keys2)
-
-dict_within_selectivity = functions_xcontext.create_dict_within_selectivity(nfile, dict_module_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
-dict_across_activity    = functions_xcontext.create_dict_across_activity(nfile, dict_module_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
-dict_across_context_and_trial_activity    = functions_xcontext.create_dict_across_context_and_trial_activity(nfile, dict_module_activity, tix_delay_range, keys1, keys2, keys_within_context, keys_across_context)
-
-
-#%%
+importlib.reload(plot_modules)
 
 module_plots = plot_modules.ModulePlots(
     figpath=figpath,
-    nfile=nfile,
-    fit_summary=fit_summary,
+    nfile=par.nfile,
+    data_nonoutlier=data_nonoutlier,
     dict_topcells_1x2=dict_topcells_1x2,
     CDdotproduct=CDdotproduct,
     dict_CDdp_err=dict_CDdp_err,
     dict_module_activity=dict_module_activity,
-    tix_delay_range=tix_delay_range,
+    tix_late_delay=tix_late_delay,
     sequential_P1=sequential_P1,
     sequential_A1=sequential_A1,
     sequential_P2=sequential_P2,
     sequential_A2=sequential_A2,
     dict_within_selectivity=dict_within_selectivity,
+    dict_within_selectivity_neurons=dict_within_selectivity_neurons,
     dict_across_activity=dict_across_activity,
+    dict_across_activity_neurons=dict_across_activity_neurons,
     dict_across_context_and_trial_activity=dict_across_context_and_trial_activity,
-    keys_within_context=keys_within_context,
-    keys_across_context=keys_across_context
+    keys_within_context=par.keys_within_context,
+    keys_across_context=par.keys_across_context,
+    keys1=par.keys1,
+    keys2=par.keys2,
 )
+
+
 
 #%%
 
 module_plots.plot_module_size(savefig=False)
 
-module_plots.plot_CDdotprod_error(savefig=False)
+module_plots.plot_CDdotprod_error(savefig=True)
 
-module_plots.plot_module_activity(savefig=False)
+module_plots.plot_module_activity(savefig=True)
 
-module_plots.plot_sequential_activity(savefig=False)
+module_plots.plot_sequential_activity(savefig=True)
 
-module_plots.plot_CDdotproduct_vs_module_activity(savefig=False)
+module_plots.plot_CDdotproduct_vs_module_activity(savefig=True)
 
 
 
@@ -430,8 +418,8 @@ titles1 = [r'$P_1^+A_1^-$', r'$P_1^+A_1^+$', r'$P_1^-A_1^+$']
 labels2 = [r'$P_2^+A_2^-$', r'$P_2^+A_2^+$', r'$P_2^-A_2^+$']
 for i2, key2 in enumerate(keys2):
     for i1, key1 in enumerate(keys1):        
-        diff1 = np.nanmean(dict_module_activity[key1][key2]['P1'][:,tix_delay_range] - dict_module_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
-        diff2 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_delay_range] - dict_module_activity[key1][key2]['A2'][:,tix_delay_range], axis=1)
+        diff1 = np.nanmean(dict_module_activity[key1][key2]['P1'][:,tix_late_delay] - dict_module_activity[key1][key2]['A1'][:,tix_late_delay], axis=1)
+        diff2 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_late_delay] - dict_module_activity[key1][key2]['A2'][:,tix_late_delay], axis=1)
         diff1_mean = np.nanmean(diff1)
         diff2_mean = np.nanmean(diff2)        
         diff1_std  = np.nanstd(diff1)
@@ -527,8 +515,8 @@ for i2, key2 in enumerate(keys2):
         # top: context 1
         # print('key1', key1)
         
-        diff1 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_delay_range] - dict_module_activity[key1][key2]['P1'][:,tix_delay_range], axis=1)
-        diff2 = np.nanmean(dict_module_activity[key1][key2]['A2'][:,tix_delay_range] - dict_module_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
+        diff1 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_late_delay] - dict_module_activity[key1][key2]['P1'][:,tix_late_delay], axis=1)
+        diff2 = np.nanmean(dict_module_activity[key1][key2]['A2'][:,tix_late_delay] - dict_module_activity[key1][key2]['A1'][:,tix_late_delay], axis=1)
         diff1_mean = np.nanmean(diff1)
         diff2_mean = np.nanmean(diff2)        
         diff1_std  = np.nanstd(diff1)
@@ -625,8 +613,8 @@ for i2, key2 in enumerate(keys2):
         # top: context 1
         # print('key1', key1)
         
-        diff1 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_delay_range] - dict_module_activity[key1][key2]['A1'][:,tix_delay_range], axis=1)
-        diff2 = np.nanmean(dict_module_activity[key1][key2]['A2'][:,tix_delay_range] - dict_module_activity[key1][key2]['P1'][:,tix_delay_range], axis=1)
+        diff1 = np.nanmean(dict_module_activity[key1][key2]['P2'][:,tix_late_delay] - dict_module_activity[key1][key2]['A1'][:,tix_late_delay], axis=1)
+        diff2 = np.nanmean(dict_module_activity[key1][key2]['A2'][:,tix_late_delay] - dict_module_activity[key1][key2]['P1'][:,tix_late_delay], axis=1)
         diff1_mean = np.nanmean(diff1)
         diff2_mean = np.nanmean(diff2)        
         diff1_std  = np.nanstd(diff1)
@@ -1377,7 +1365,7 @@ plt.tight_layout()
 # frac_1x2_outof_topcells_1   = np.zeros(nfile)
 # CD1err = np.zeros(nfile)
 # CD2err = np.zeros(nfile)
-# CDdp = np.zeros(nfile)
+# CDdotproduct = np.zeros(nfile)
 # CDdp_1x2 = np.zeros(nfile)
 # CDdp_1_2 = np.zeros(nfile)
 # CDdp_2_1 = np.zeros(nfile)
@@ -1421,7 +1409,7 @@ plt.tight_layout()
 #     CD2err[fx] = np.linalg.norm(CD2aprx - CD2)
     
 #     # approximate CD1CD2
-#     CDdp[fx] = np.inner(CD1,CD2)
+#     CDdotproduct[fx] = np.inner(CD1,CD2)
 #     CDdp_1x2[fx] = np.inner(CD1[topcells_1x2],CD2[topcells_1x2])
 #     CDdp_1_2[fx] = np.inner(CD1[topcells_1_2],CD2[topcells_1_2])
 #     CDdp_2_1[fx] = np.inner(CD1[topcells_2_1],CD2[topcells_2_1])
@@ -1454,7 +1442,7 @@ plt.axhline(0.5,color='gray',linestyle='--')
 plt.ylabel('CD error')
 plt.legend()
 plt.subplot(313)
-plt.plot(CDdp, label='all neurons')
+plt.plot(CDdotproduct, label='all neurons')
 plt.plot(CDdp_1x2, c='k', label='shared neurons')
 # plt.plot(CDdp_1_2, c='r', label='removed')
 # plt.plot(CDdp_2_1, c='b', label='emerged')
@@ -1714,7 +1702,7 @@ diff1 = np.mean((data_P1 - data_A1)[:,12:16],axis=1)
 diff2 = np.mean((data_P2 - data_A2)[:,12:16],axis=1)
 CD1 = diff1 / np.linalg.norm(diff1)
 CD2 = diff2 / np.linalg.norm(diff2)
-CDdp = np.inner(CD1,CD2)
+CDdotproduct = np.inner(CD1,CD2)
 
 
 topcells_1x2_union = np.concatenate((topcells_P1xP2,topcells_P1xA2,topcells_A1xP2,topcells_A1xA2))
@@ -1729,7 +1717,7 @@ _CDdp_P1xP2_A1xA2 = np.sum((CD1*CD2)[np.unique(np.concatenate((topcells_P1xP2,to
 _CDdp_P1xP2_A1xA2_A1xP2 = np.sum((CD1*CD2)[np.unique(np.concatenate((topcells_P1xP2,topcells_A1xA2,topcells_A1xP2)))])
 
 
-print('CD dot product: ', CDdp)
+print('CD dot product: ', CDdotproduct)
 print('CD dot product 1x2: ', _CDdp_1x2)
 print('CD dot product P1xP2: ', _CDdp_P1xP2)
 print('CD dot product A1xA2: ', _CDdp_A1xA2)
@@ -1789,7 +1777,7 @@ diff1 = np.mean((data_P1 - data_A1)[:,12:16],axis=1)
 diff2 = np.mean((data_P2 - data_A2)[:,12:16],axis=1)
 CD1 = diff1 / np.linalg.norm(diff1)
 CD2 = diff2 / np.linalg.norm(diff2)
-CDdp = np.inner(CD1,CD2)
+CDdotproduct = np.inner(CD1,CD2)
 
 cells_sorted = np.argsort(CD1)
 topcells_1_sorted = cells_sorted[np.isin(cells_sorted, topcells_1)]
