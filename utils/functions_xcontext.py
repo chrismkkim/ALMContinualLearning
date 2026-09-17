@@ -47,6 +47,46 @@ def create_dict_topcells_1x2(nfile, dict_topcells, tix_late_delay):
 
     return dict_topcells_1x2
 
+
+def create_dict_topcells_1x2_SDR(nfile, dict_topcells_X):
+    
+    dict_topcells_2 = {
+        'P2+A2-': np.array([]),
+        'P2+A2+': np.array([]),
+        'P2-A2+': np.array([])
+    }
+    dict_topcells_1x2_fx = {
+        'P1+A1-': copy.deepcopy(dict_topcells_2),
+        'P1+A1+': copy.deepcopy(dict_topcells_2),
+        'P1-A1+': copy.deepcopy(dict_topcells_2),
+    }
+    dict_topcells_1x2 = {fx:copy.deepcopy(dict_topcells_1x2_fx) for fx in range(nfile)}
+
+    for fx in range(nfile):                
+        topcells_P1 = dict_topcells_X['P1'][fx]
+        topcells_A1 = dict_topcells_X['A1'][fx]
+        topcells_P2 = dict_topcells_X['P2'][fx]
+        topcells_A2 = dict_topcells_X['A2'][fx]
+        P1_A1 = topcells_P1[~np.isin(topcells_P1,topcells_A1)]
+        P1A1  = topcells_P1[ np.isin(topcells_P1,topcells_A1)]
+        A1_P1 = topcells_A1[~np.isin(topcells_A1,topcells_P1)]
+        P2_A2 = topcells_P2[~np.isin(topcells_P2,topcells_A2)]
+        P2A2  = topcells_P2[ np.isin(topcells_P2,topcells_A2)]
+        A2_P2 = topcells_A2[~np.isin(topcells_A2,topcells_P2)]
+        
+        dict_topcells_1x2[fx]['P1+A1-']['P2+A2-'] = P1_A1[np.isin(P1_A1,P2_A2)]
+        dict_topcells_1x2[fx]['P1+A1-']['P2+A2+'] = P1_A1[np.isin(P1_A1,P2A2)]
+        dict_topcells_1x2[fx]['P1+A1-']['P2-A2+'] = P1_A1[np.isin(P1_A1,A2_P2)]
+        dict_topcells_1x2[fx]['P1+A1+']['P2+A2-'] =  P1A1[np.isin(P1A1, P2_A2)]
+        dict_topcells_1x2[fx]['P1+A1+']['P2+A2+'] =  P1A1[np.isin(P1A1, P2A2)]
+        dict_topcells_1x2[fx]['P1+A1+']['P2-A2+'] =  P1A1[np.isin(P1A1, A2_P2)]
+        dict_topcells_1x2[fx]['P1-A1+']['P2+A2-'] = A1_P1[np.isin(A1_P1,P2_A2)]
+        dict_topcells_1x2[fx]['P1-A1+']['P2+A2+'] = A1_P1[np.isin(A1_P1,P2A2)]
+        dict_topcells_1x2[fx]['P1-A1+']['P2-A2+'] = A1_P1[np.isin(A1_P1,A2_P2)]
+
+    return dict_topcells_1x2
+
+
 def create_dict_CDdotprod(nfile, dict_topcells, dict_topcells_1x2, tix_late_delay, data_nonoutlier):
     
     CDdotproduct = np.zeros(nfile)
@@ -133,6 +173,52 @@ def create_dict_CDdotprod_err(nfile, dict_CDdp, CDdp):
                                                     dict_CDdp[fx]['P1-A1+']['P2-A2+'] + dict_CDdp[fx]['P1+A1+']['P2-A2+'] - CDdp[fx])
 
     return dict_CDdp_err
+
+
+def create_dict_CDdotprod_in_epoch(nfile, dict_topcells_S, dict_topcells_1x2_S, tix_sample, data_nonoutlier):
+    
+    CDdotproduct = np.zeros(nfile)
+    CDdp_1x2 = np.zeros(nfile)
+    dict_CDdp = copy.deepcopy(dict_topcells_1x2_S)
+    for fx in range(nfile):
+        # topcells
+        topcells_P1 = dict_topcells_S['P1'][fx]
+        topcells_A1 = dict_topcells_S['A1'][fx]
+        topcells_P2 = dict_topcells_S['P2'][fx]
+        topcells_A2 = dict_topcells_S['A2'][fx]
+
+        # shared topcells
+        topcells_1 = np.unique(np.concatenate((topcells_P1,topcells_A1)))
+        topcells_2 = np.unique(np.concatenate((topcells_P2,topcells_A2)))
+        topcells_1x2 = topcells_1[np.isin(topcells_1,topcells_2)]
+        
+        # compute CD1, CD2
+        data_P1   = data_nonoutlier[fx]['P1']
+        data_A1   = data_nonoutlier[fx]['A1']
+        data_P2   = data_nonoutlier[fx]['P2']
+        data_A2   = data_nonoutlier[fx]['A2']
+        diff1 = np.mean((data_P1 - data_A1)[:,tix_sample],axis=1)
+        diff2 = np.mean((data_P2 - data_A2)[:,tix_sample],axis=1)
+        CD1 = diff1 / np.linalg.norm(diff1)
+        CD2 = diff2 / np.linalg.norm(diff2)
+        
+        # approximate CD1CD2
+        CDdotproduct[fx] = np.inner(CD1,CD2)
+        CDdp_1x2[fx] = np.inner(CD1[topcells_1x2],CD2[topcells_1x2])
+        
+        # Divide CD1CD2 into components
+        dict_CDdp[fx]['P1+A1-']['P2+A2-'] = np.sum((CD1*CD2)[dict_topcells_1x2_S[fx]['P1+A1-']['P2+A2-']])
+        dict_CDdp[fx]['P1+A1-']['P2+A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2_S[fx]['P1+A1-']['P2+A2+']])
+        dict_CDdp[fx]['P1+A1-']['P2-A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2_S[fx]['P1+A1-']['P2-A2+']])
+        dict_CDdp[fx]['P1+A1+']['P2+A2-'] = np.sum((CD1*CD2)[dict_topcells_1x2_S[fx]['P1+A1+']['P2+A2-']])
+        dict_CDdp[fx]['P1+A1+']['P2+A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2_S[fx]['P1+A1+']['P2+A2+']])
+        dict_CDdp[fx]['P1+A1+']['P2-A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2_S[fx]['P1+A1+']['P2-A2+']])
+        dict_CDdp[fx]['P1-A1+']['P2+A2-'] = np.sum((CD1*CD2)[dict_topcells_1x2_S[fx]['P1-A1+']['P2+A2-']])
+        dict_CDdp[fx]['P1-A1+']['P2+A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2_S[fx]['P1-A1+']['P2+A2+']])
+        dict_CDdp[fx]['P1-A1+']['P2-A2+'] = np.sum((CD1*CD2)[dict_topcells_1x2_S[fx]['P1-A1+']['P2-A2+']])
+
+    return dict_CDdp, CDdotproduct, CDdp_1x2
+
 
 def create_dict_module_activity(nfile, dict_topcells_1x2, data_nonoutlier, keys1, keys2, keys3):
     

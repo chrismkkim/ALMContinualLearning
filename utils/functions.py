@@ -65,11 +65,15 @@ def create_plot_sf(cmap_type, sf):
     return plot_sf    
 
 def gen_trialavg_neural_data(dirpath, par):
+    # total number of neurons
+    num_og_cells = {fx:0 for fx in range(par.nfile)}
     # trial-averaged neural data
     data_trial = {'P1': np.array([]), 'A1': np.array([]), 'P2': np.array([]),'A2': np.array([])}
     data_all = {fx: copy.deepcopy(data_trial) for fx in range(par.nfile)}
+    
+    print('Generate trial averaged neural activity...')
+    
     for fx in range(par.nfile):
-        print(fx)    
         # sorted by relearn speed 
         fx_sorted = par.sorted_indices_by_relearn_speed[fx]
         filepath   = dirpath + par.merged_ID[fx_sorted] + '.npy'
@@ -90,7 +94,9 @@ def gen_trialavg_neural_data(dirpath, par):
         data_all[fx]['A1'] = opto_1L_avg_set1[:,par.tix_start:par.tix_end]
         data_all[fx]['P2'] = opto_2L_avg_set1[:,par.tix_start:par.tix_end]
         data_all[fx]['A2'] = opto_2R_avg_set1[:,par.tix_start:par.tix_end]
-    return data_all
+        # number of neurons
+        num_og_cells[fx] = data_all[fx]['P1'].shape[0]
+    return data_all, num_og_cells
 
 def gen_constrain_to_nonoutliers(par, data_all):
     # contstrain the data to nonoutlier neurons
@@ -104,6 +110,7 @@ def gen_constrain_to_nonoutliers(par, data_all):
         keep = keep_nonoutliers & keep_nonzero
         nonoutlier[fx] = np.where(keep)[0]    
         if np.any(~keep_nonzero) > 0:
+            # show the indices of neurons with zero activity
             print('-----')
             print(fx)
             print(np.where(~keep_nonzero==True))
@@ -113,7 +120,7 @@ def gen_constrain_to_nonoutliers(par, data_all):
     for fx in range(par.nfile):
         for act in par.acts:
             _data_nonoutlier[fx][act] = data_all[fx][act][nonoutlier[fx]]
-    return _data_nonoutlier
+    return _data_nonoutlier, nonoutlier
     
 def gen_normalize_by_meanrate(par, _data_nonoutlier):
     # get the mean rate of each context
@@ -153,6 +160,71 @@ def gen_topcells(thr_var, par, data_nonoutlier):
             dict_topcells[act]['data_binary'][fx]            = _data_binary_fx    
     return dict_topcells
 
+def gen_topcells_SDR(par, dict_topcells, tix_sample, tix_delay1, tix_delay2, tix_response, keep_D2):
+
+    dict_topcells_format = {i:[] for i in range(par.nfile)}
+    _dict_topcells_S  = {act: copy.deepcopy(dict_topcells_format) for act in par.acts}    
+    _dict_topcells_D1 = {act: copy.deepcopy(dict_topcells_format) for act in par.acts}    
+    _dict_topcells_D2 = {act: copy.deepcopy(dict_topcells_format) for act in par.acts}    
+    _dict_topcells_R  = {act: copy.deepcopy(dict_topcells_format) for act in par.acts}    
+    for act in par.acts:
+        for fx in range(par.nfile):
+            _dict_topcells_S[act][fx]  = np.unique(np.concatenate([dict_topcells[act]['topcells_at_t'][fx][tx] for tx in tix_sample]))
+            _dict_topcells_D1[act][fx] = np.unique(np.concatenate([dict_topcells[act]['topcells_at_t'][fx][tx] for tx in tix_delay1]))
+            _dict_topcells_D2[act][fx] = np.unique(np.concatenate([dict_topcells[act]['topcells_at_t'][fx][tx] for tx in tix_delay2]))
+            _dict_topcells_R[act][fx]  = np.unique(np.concatenate([dict_topcells[act]['topcells_at_t'][fx][tx] for tx in tix_response]))
+
+    # temporally causal: sample, delay1, delay2, response cells
+    if keep_D2:
+        dict_topcells_S  = copy.deepcopy(_dict_topcells_S)
+        dict_topcells_D1 = copy.deepcopy(_dict_topcells_D1)
+        dict_topcells_D2 = copy.deepcopy(_dict_topcells_D2)
+        dict_topcells_R  = copy.deepcopy(_dict_topcells_R)
+        for act in par.acts:
+            for fx in range(par.nfile):
+                cells_S  = _dict_topcells_S[act][fx]
+                cells_D1 = _dict_topcells_D1[act][fx]
+                cells_D2 = _dict_topcells_D2[act][fx]
+                cells_R  = _dict_topcells_R[act][fx]
+                cells_S_D1    = np.unique(np.concatenate((cells_S,cells_D1)))
+                cells_S_D2    = np.unique(np.concatenate((cells_S,cells_D2)))
+                cells_S_D1_D2 = np.unique(np.concatenate((cells_S,cells_D1,cells_D2)))
+                
+                #   - sensory  = S+D1 \ D2   <- active in sample and early delay, inactive in late delay
+                #   - decision = D2          <- active in late delay
+                #   - response = R \ S+D1+D2 <- active in response, inactive before response
+                dict_topcells_S[act][fx]  = np.copy(cells_S_D1[~np.isin(cells_S_D1,cells_D2)]) 
+                dict_topcells_D1[act][fx] = np.copy(cells_D1[~np.isin(cells_D1,cells_S_D2)])
+                dict_topcells_D2[act][fx] = np.copy(cells_D2)
+                dict_topcells_R[act][fx]  = np.copy(cells_R[~np.isin(cells_R,cells_S_D1_D2)])                
+        return dict_topcells_S, dict_topcells_D1, dict_topcells_D2, dict_topcells_R
+    else:
+        dict_topcells_S    = copy.deepcopy(_dict_topcells_S)
+        dict_topcells_D1   = copy.deepcopy(_dict_topcells_D1)
+        dict_topcells_D2S  = copy.deepcopy(_dict_topcells_D2)
+        dict_topcells_D2_S = copy.deepcopy(_dict_topcells_D2)
+        dict_topcells_R    = copy.deepcopy(_dict_topcells_R)
+        for act in par.acts:
+            for fx in range(par.nfile):
+                cells_S    = _dict_topcells_S[act][fx]
+                cells_D1   = _dict_topcells_D1[act][fx]
+                cells_D2 = _dict_topcells_D2[act][fx]
+                cells_R    = _dict_topcells_R[act][fx]
+                cells_S_D1    = np.unique(np.concatenate((cells_S,cells_D1)))
+                cells_S_D2    = np.unique(np.concatenate((cells_S,cells_D2)))
+                cells_S_D1_D2 = np.unique(np.concatenate((cells_S,cells_D1,cells_D2)))
+                
+                #   - sensory            = S+D1 \ D2   <- active in sample and early delay, inactive in late delay
+                #   - decision & sensory = D2 & S+D1   <- active in sample and late delay
+                #   - decision only      = D2 \ S+D1   <- active in late delay
+                #   - response           = R \ S+D1+D2 <- active in response, inactive before response                
+                dict_topcells_S[act][fx]    = np.copy(cells_S_D1[~np.isin(cells_S_D1,cells_D2)]) # S and D1
+                dict_topcells_D1[act][fx]   = np.copy(cells_D1[~np.isin(cells_D1,cells_S_D2)])
+                dict_topcells_D2S[act][fx]  = np.copy(cells_D2[np.isin(cells_D2,cells_S_D1)])
+                dict_topcells_D2_S[act][fx] = np.copy(cells_D2[~np.isin(cells_D2,cells_S_D1)])
+                dict_topcells_R[act][fx]    = np.copy(cells_R[~np.isin(cells_R,cells_S_D1_D2)])
+        return dict_topcells_S, dict_topcells_D1, dict_topcells_D2S, dict_topcells_D2_S, dict_topcells_R
+        
 
 def split_trials(data, data_type):
     
