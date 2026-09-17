@@ -60,14 +60,28 @@ class LatentRNN(nn.Module):
     self.input_by_condition with those inputs.
     """
 
-    def __init__(self, n_units, n_time, n_conditions=len(CONDITIONS), dt=DT):
+    def __init__(
+        self,
+        n_units,
+        n_time,
+        n_sessions,
+        n_conditions=len(CONDITIONS),
+        dt=DT,
+    ):
         super().__init__()
 
         self.n_units = n_units
         self.n_time = n_time
+        self.n_sessions = n_sessions
         self.dt = dt
 
-        self.W = nn.Parameter(0.05 * torch.randn(n_units, n_units))
+        # All sessions start from the exact same recurrent matrix.
+        # During training, each W_by_session[fx] is updated independently.
+        W_init = 0.05 * torch.randn(n_units, n_units)
+        self.W_by_session = nn.ParameterList([
+            nn.Parameter(W_init.clone())
+            for _ in range(n_sessions)
+        ])
         self.h0 = nn.Parameter(torch.zeros(n_conditions, n_units))
         self.input_by_condition = nn.Parameter(
             0.01 * torch.randn(n_conditions, n_time, n_units)
@@ -77,13 +91,14 @@ class LatentRNN(nn.Module):
         input_mask[: n_time // 3] = 1.0
         self.register_buffer('input_mask', input_mask)
         
-    def forward(self):
+    def forward(self, fx):
         """
-        Return rectified latent activity g(h) for every condition.
+        Return rectified latent activity g(h) for one session.
 
         Shape:
             g_by_condition[condition] = (n_time, n_units)
         """
+        W = self.W_by_session[fx]
         g_by_condition = {}
 
         for icond, condition in enumerate(CONDITIONS):
@@ -94,7 +109,7 @@ class LatentRNN(nn.Module):
                 h_over_time.append(h)
                 g_h = F.relu(h)
                 I_t = self.input_by_condition[icond, t] * self.input_mask[t]
-                dh = -h + g_h @ self.W.T + I_t
+                dh = -h + g_h @ W.T + I_t
                 h = h + self.dt * dh
 
             h_over_time = torch.stack(h_over_time, dim=0)
@@ -294,10 +309,10 @@ def train_latent_network(
     device='cpu',
 ):
     """
-    Train W and the session readouts.
+    Train session-specific W matrices and the session readouts.
 
     At every optimizer step:
-        1. Simulate the latent RNN once to get g(h).
+        1. Simulate the latent RNN for each session to get g(h).
         2. For each dataset/session, rebuild the actual readout from the
            current total readout matrix and the current cells*.npy metadata.
         3. Predict neural activity: actual_readout @ g(h).T
@@ -309,8 +324,9 @@ def train_latent_network(
     """
     datasets = load_training_data(training_path)
     n_time = infer_n_time(datasets)
+    n_sessions = len(datasets[0]['cells'])
 
-    rnn = LatentRNN(N_RNN_UNITS, n_time).to(device)
+    rnn = LatentRNN(N_RNN_UNITS, n_time, n_sessions).to(device)
 
     # One readout model per independently resampled training dataset.
     # Each readout model contains 33 session-specific total readout matrices.
@@ -329,7 +345,6 @@ def train_latent_network(
     for step in range(n_steps):
         optimizer.zero_grad()
 
-        g_by_condition = rnn()
         loss = torch.tensor(0.0, device=device)
         n_terms = 0
 
@@ -339,6 +354,7 @@ def train_latent_network(
             readouts = readouts_by_dataset[idata]
 
             for fx in sorted(cells):
+                g_by_condition = rnn(fx)
                 check_activity_matches_cells(cells[fx], activity[fx])
 
                 actual_readout, _ = build_actual_readout(
@@ -405,6 +421,7 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
             'n_rnn_units': N_RNN_UNITS,
             'n_units_per_group': N_UNITS_PER_GROUP,
             'n_time': results['rnn'].n_time,
+            'n_sessions': results['rnn'].n_sessions,
             'dt': results['rnn'].dt,
             'neuron_types': NEURON_TYPES,
             'groups': GROUPS,
@@ -431,8 +448,9 @@ def load_latent_network(
     datasets = load_training_data(training_path)
     checkpoint = torch.load(checkpoint_path, map_location=device)
     n_time = checkpoint['config']['n_time']
+    n_sessions = checkpoint['config']['n_sessions']
 
-    rnn = LatentRNN(N_RNN_UNITS, n_time).to(device)
+    rnn = LatentRNN(N_RNN_UNITS, n_time, n_sessions).to(device)
     rnn.load_state_dict(checkpoint['rnn_state_dict'])
 
     readouts_by_dataset = nn.ModuleList([
@@ -483,7 +501,7 @@ def plot_prediction_vs_target(
 
     rnn.eval()
     with torch.no_grad():
-        g_by_condition = rnn()
+        g_by_condition = rnn(fx)
 
         total_readout_fx = readouts_by_dataset[dataset_idx].total_readout(fx)
         actual_readout, _ = build_actual_readout(
@@ -551,6 +569,7 @@ def _draw_unit_boundaries(ax):
 
 def plot_latent_activity_and_weights(
     results,
+    fx=0,
     condition='P1',
     savefig=True,
 ):
@@ -565,9 +584,9 @@ def plot_latent_activity_and_weights(
     rnn.eval()
 
     with torch.no_grad():
-        g_by_condition = rnn()
+        g_by_condition = rnn(fx)
         latent_activity = g_by_condition[condition].T.cpu().numpy()
-        W = rnn.W.cpu().numpy()
+        W = rnn.W_by_session[fx].cpu().numpy()
 
     wlim = np.max(np.abs(W))/4
     if wlim == 0:
@@ -583,7 +602,7 @@ def plot_latent_activity_and_weights(
         vmin=0,
         vmax=10
     )
-    plt.title(f'Latent activity g(h): {condition}')
+    plt.title(f'Latent activity g(h): fx {fx}, {condition}')
     plt.xlabel('time')
     plt.ylabel('latent units')
     plt.colorbar(fraction=0.046, pad=0.04)
@@ -594,7 +613,7 @@ def plot_latent_activity_and_weights(
 
     if savefig:
         plt.savefig(
-            SAVE_FIGURE_PATH + f'latent_activity_{condition}.png',
+            SAVE_FIGURE_PATH + f'latent_activity_fx{fx}_{condition}.png',
             dpi=300
         )
 
@@ -608,7 +627,7 @@ def plot_latent_activity_and_weights(
         vmin=-wlim,
         vmax=wlim
     )
-    plt.title('Recurrent weight W')
+    plt.title(f'Recurrent weight W: fx {fx}')
     plt.xlabel('from unit')
     plt.ylabel('to unit')
     plt.colorbar(fraction=0.046, pad=0.04)
@@ -618,7 +637,7 @@ def plot_latent_activity_and_weights(
 
     if savefig:
         plt.savefig(
-            SAVE_FIGURE_PATH + f'W_{condition}.png',
+            SAVE_FIGURE_PATH + f'W_fx{fx}_{condition}.png',
             dpi=300
         )
 
@@ -663,5 +682,6 @@ if __name__ == '__main__':
 
     plot_latent_activity_and_weights(
         loaded_results,
+        fx=args.fx,
         condition=args.condition,
     )
