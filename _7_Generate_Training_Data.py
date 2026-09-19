@@ -18,7 +18,7 @@ trainingdatapath = 'data/training/'
 
 par = experiment_param.ExperimentParam(dirpath)
 
-ndata = 5
+ndata = 10
 for idata in range(ndata):
     
     # trial-averaged neural data

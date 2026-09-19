@@ -26,7 +26,7 @@ NEURON_TYPES = ['S', 'D', 'R']
 GROUPS = ['Group0', 'Group1', 'Group2', 'Group3']
 # CONDITIONS = ['P1', 'A1', 'P2', 'A2']
 CONDITIONS = ['P1', 'A1']
-N_UNITS_PER_GROUP = 10
+N_UNITS_PER_GROUP = 10 #10
 DT = 0.1
 
 
@@ -87,8 +87,12 @@ class LatentRNN(nn.Module):
             0.01 * torch.randn(n_conditions, n_time, n_units)
         )
 
+        # The external input is trainable only in the first and last thirds.
+        # Multiplying by zero in the middle third blocks gradients to
+        # input_by_condition[:, middle_start:middle_end].
         input_mask = torch.zeros(n_time)
         input_mask[: n_time // 3] = 1.0
+        input_mask[2 * n_time // 3:] = 1.0
         self.register_buffer('input_mask', input_mask)
         
     def forward(self, fx):
@@ -99,6 +103,8 @@ class LatentRNN(nn.Module):
             g_by_condition[condition] = (n_time, n_units)
         """
         W = self.W_by_session[fx]
+        middle_start = self.n_time // 3
+        middle_end = 2 * self.n_time // 3
         g_by_condition = {}
 
         for icond, condition in enumerate(CONDITIONS):
@@ -106,10 +112,19 @@ class LatentRNN(nn.Module):
             h_over_time = []
 
             for t in range(self.n_time):
+                # if t == middle_start or t == middle_end:
+                #     h = h.detach()
+
                 h_over_time.append(h)
                 g_h = F.relu(h)
                 I_t = self.input_by_condition[icond, t] * self.input_mask[t]
-                dh = -h + g_h @ W.T + I_t
+
+                if middle_start <= t < middle_end:
+                    W_t = W
+                else:
+                    W_t = W.detach()
+
+                dh = -h + g_h @ W_t.T + I_t
                 h = h + self.dt * dh
 
             h_over_time = torch.stack(h_over_time, dim=0)
@@ -382,7 +397,7 @@ def train_latent_network(
 
         loss_history.append(float(loss.detach().cpu()))
 
-        if step % 10 == 0:
+        if step % 50 == 0:
             print(f'step {step:04d} | loss {loss_history[-1]:.6f}')
 
     results = {
