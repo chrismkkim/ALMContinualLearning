@@ -27,6 +27,7 @@ GROUPS = ['Group0', 'Group1', 'Group2', 'Group3']
 # CONDITIONS = ['P1', 'A1', 'P2', 'A2']
 CONDITIONS = ['P1', 'A1']
 N_UNITS_PER_GROUP = 10 #10
+DEFAULT_RECURRENT_RANK = 10
 DT = 0.1
 
 
@@ -65,6 +66,7 @@ class LatentRNN(nn.Module):
         n_units,
         n_time,
         n_sessions,
+        recurrent_rank=DEFAULT_RECURRENT_RANK,
         n_conditions=len(CONDITIONS),
         dt=DT,
     ):
@@ -73,13 +75,28 @@ class LatentRNN(nn.Module):
         self.n_units = n_units
         self.n_time = n_time
         self.n_sessions = n_sessions
+        self.recurrent_rank = recurrent_rank
         self.dt = dt
 
-        # All sessions start from the exact same recurrent matrix.
-        # During training, each W_by_session[fx] is updated independently.
-        W_init = 0.05 * torch.randn(n_units, n_units)
-        self.W_by_session = nn.ParameterList([
-            nn.Parameter(W_init.clone())
+        if recurrent_rank < 1 or recurrent_rank > n_units:
+            raise ValueError(
+                f'recurrent_rank must be between 1 and {n_units}, '
+                f'got {recurrent_rank}.'
+            )
+
+        # Each session has a low-rank recurrent matrix:
+        #     W = U @ V.T
+        # with rank at most recurrent_rank. All sessions start from the exact
+        # same U and V factors, then each session's factors train independently.
+        factor_scale = np.sqrt(0.05 / np.sqrt(recurrent_rank))
+        U_init = factor_scale * torch.randn(n_units, recurrent_rank)
+        V_init = factor_scale * torch.randn(n_units, recurrent_rank)
+        self.U_by_session = nn.ParameterList([
+            nn.Parameter(U_init.clone())
+            for _ in range(n_sessions)
+        ])
+        self.V_by_session = nn.ParameterList([
+            nn.Parameter(V_init.clone())
             for _ in range(n_sessions)
         ])
         self.h0 = nn.Parameter(torch.zeros(n_conditions, n_units))
@@ -94,6 +111,10 @@ class LatentRNN(nn.Module):
         input_mask[: n_time // 3] = 1.0
         input_mask[2 * n_time // 3:] = 1.0
         self.register_buffer('input_mask', input_mask)
+
+    def recurrent_weight(self, fx):
+        """Return the rank-constrained recurrent matrix for one session."""
+        return self.U_by_session[fx] @ self.V_by_session[fx].T
         
     def forward(self, fx):
         """
@@ -102,7 +123,7 @@ class LatentRNN(nn.Module):
         Shape:
             g_by_condition[condition] = (n_time, n_units)
         """
-        W = self.W_by_session[fx]
+        W = self.recurrent_weight(fx)
         middle_start = self.n_time // 3
         middle_end = 2 * self.n_time // 3
         g_by_condition = {}
@@ -319,12 +340,13 @@ def check_activity_matches_cells(cells_fx, activity_fx):
 def train_latent_network(
     n_steps=200,
     learning_rate=1e-3,
+    recurrent_rank=DEFAULT_RECURRENT_RANK,
     training_path=TRAINING_DATA_PATH,
     save_path=SAVE_LATENT_PATH,
     device='cpu',
 ):
     """
-    Train session-specific W matrices and the session readouts.
+    Train session-specific low-rank W matrices and the session readouts.
 
     At every optimizer step:
         1. Simulate the latent RNN for each session to get g(h).
@@ -341,7 +363,12 @@ def train_latent_network(
     n_time = infer_n_time(datasets)
     n_sessions = len(datasets[0]['cells'])
 
-    rnn = LatentRNN(N_RNN_UNITS, n_time, n_sessions).to(device)
+    rnn = LatentRNN(
+        N_RNN_UNITS,
+        n_time,
+        n_sessions,
+        recurrent_rank=recurrent_rank
+    ).to(device)
 
     # One readout model per independently resampled training dataset.
     # Each readout model contains 33 session-specific total readout matrices.
@@ -420,7 +447,8 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
     Save all trained network parameters needed to restore the model.
 
     This includes:
-        - RNN parameters: W, h0, and condition-dependent input I
+        - RNN parameters: low-rank W factors, h0, and
+          condition-dependent input I
         - raw_total_readouts for every dataset/session
         - loss history and small model metadata
     """
@@ -437,6 +465,7 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
             'n_units_per_group': N_UNITS_PER_GROUP,
             'n_time': results['rnn'].n_time,
             'n_sessions': results['rnn'].n_sessions,
+            'recurrent_rank': results['rnn'].recurrent_rank,
             'dt': results['rnn'].dt,
             'neuron_types': NEURON_TYPES,
             'groups': GROUPS,
@@ -447,6 +476,35 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
     torch.save(checkpoint, checkpoint_path)
     results['checkpoint_path'] = checkpoint_path
     print(f'Saved latent network to {checkpoint_path}')
+
+
+def convert_legacy_rnn_state_dict(rnn_state_dict, rnn):
+    """
+    Convert older checkpoints that stored full W_by_session matrices.
+
+    The full recurrent matrix is projected into the requested low-rank form
+    using a truncated SVD:
+        W ~= U @ V.T
+    """
+    converted = {
+        key: value
+        for key, value in rnn_state_dict.items()
+        if not key.startswith('W_by_session.')
+    }
+
+    for fx in range(rnn.n_sessions):
+        legacy_key = f'W_by_session.{fx}'
+        if legacy_key not in rnn_state_dict:
+            continue
+
+        W = rnn_state_dict[legacy_key]
+        U_svd, S_svd, Vh_svd = torch.linalg.svd(W, full_matrices=False)
+        rank = rnn.recurrent_rank
+        sqrt_s = torch.sqrt(S_svd[:rank])
+        converted[f'U_by_session.{fx}'] = U_svd[:, :rank] * sqrt_s
+        converted[f'V_by_session.{fx}'] = Vh_svd[:rank, :].T * sqrt_s
+
+    return converted
 
 
 def load_latent_network(
@@ -464,9 +522,25 @@ def load_latent_network(
     checkpoint = torch.load(checkpoint_path, map_location=device)
     n_time = checkpoint['config']['n_time']
     n_sessions = checkpoint['config']['n_sessions']
+    recurrent_rank = checkpoint['config'].get(
+        'recurrent_rank',
+        N_RNN_UNITS
+    )
 
-    rnn = LatentRNN(N_RNN_UNITS, n_time, n_sessions).to(device)
-    rnn.load_state_dict(checkpoint['rnn_state_dict'])
+    rnn = LatentRNN(
+        N_RNN_UNITS,
+        n_time,
+        n_sessions,
+        recurrent_rank=recurrent_rank
+    ).to(device)
+    rnn_state_dict = checkpoint['rnn_state_dict']
+    if any(key.startswith('W_by_session.') for key in rnn_state_dict):
+        print(
+            'Converting legacy W_by_session checkpoint to '
+            f'low-rank factors with rank={recurrent_rank}.'
+        )
+        rnn_state_dict = convert_legacy_rnn_state_dict(rnn_state_dict, rnn)
+    rnn.load_state_dict(rnn_state_dict)
 
     readouts_by_dataset = nn.ModuleList([
         SessionReadouts(dataset['cells'])
@@ -601,7 +675,7 @@ def plot_latent_activity_and_weights(
     with torch.no_grad():
         g_by_condition = rnn(fx)
         latent_activity = g_by_condition[condition].T.cpu().numpy()
-        W = rnn.W_by_session[fx].cpu().numpy()
+        W = rnn.recurrent_weight(fx).cpu().numpy()
 
     wlim = np.max(np.abs(W))/4
     if wlim == 0:
@@ -663,6 +737,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--n_steps', type=int, default=20)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--recurrent_rank', type=int, default=DEFAULT_RECURRENT_RANK)
     parser.add_argument('--condition', type=str, default='P1', choices=CONDITIONS)
     parser.add_argument('--load_only', action='store_true')
     parser.add_argument(
@@ -682,6 +757,7 @@ if __name__ == '__main__':
         train_latent_network(
             n_steps=args.n_steps,
             learning_rate=args.learning_rate,
+            recurrent_rank=args.recurrent_rank,
             save_path=SAVE_LATENT_PATH
         )
         loaded_results = load_latent_network(
