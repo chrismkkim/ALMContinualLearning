@@ -84,21 +84,17 @@ class LatentRNN(nn.Module):
                 f'got {recurrent_rank}.'
             )
 
-        # Each session has a low-rank recurrent matrix:
+        # All sessions share one low-rank recurrent matrix:
         #     W = U @ V.T
-        # with rank at most recurrent_rank. All sessions start from the exact
-        # same U and V factors, then each session's factors train independently.
+        # with rank at most recurrent_rank. Session-specific structure is
+        # handled by the readout matrices, not by recurrent weights.
         factor_scale = np.sqrt(0.05 / np.sqrt(recurrent_rank))
-        U_init = factor_scale * torch.randn(n_units, recurrent_rank)
-        V_init = factor_scale * torch.randn(n_units, recurrent_rank)
-        self.U_by_session = nn.ParameterList([
-            nn.Parameter(U_init.clone())
-            for _ in range(n_sessions)
-        ])
-        self.V_by_session = nn.ParameterList([
-            nn.Parameter(V_init.clone())
-            for _ in range(n_sessions)
-        ])
+        self.U = nn.Parameter(
+            factor_scale * torch.randn(n_units, recurrent_rank)
+        )
+        self.V = nn.Parameter(
+            factor_scale * torch.randn(n_units, recurrent_rank)
+        )
         self.h0 = nn.Parameter(torch.zeros(n_conditions, n_units))
         self.input_by_condition = nn.Parameter(
             0.01 * torch.randn(n_conditions, n_time, n_units)
@@ -112,9 +108,14 @@ class LatentRNN(nn.Module):
         input_mask[2 * n_time // 3:] = 1.0
         self.register_buffer('input_mask', input_mask)
 
-    def recurrent_weight(self, fx):
-        """Return the rank-constrained recurrent matrix for one session."""
-        return self.U_by_session[fx] @ self.V_by_session[fx].T
+    def recurrent_weight(self, fx=None):
+        """
+        Return the shared rank-constrained recurrent matrix.
+
+        fx is accepted for backward compatibility with older plotting and
+        analysis code, but it no longer changes the recurrent weights.
+        """
+        return self.U @ self.V.T
         
     def forward(self, fx):
         """
@@ -346,7 +347,7 @@ def train_latent_network(
     device='cpu',
 ):
     """
-    Train session-specific low-rank W matrices and the session readouts.
+    Train one shared low-rank W matrix and the session readouts.
 
     At every optimizer step:
         1. Simulate the latent RNN for each session to get g(h).
@@ -470,6 +471,7 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
             'neuron_types': NEURON_TYPES,
             'groups': GROUPS,
             'conditions': CONDITIONS,
+            'shared_recurrent_weight': True,
         },
     }
 
@@ -480,29 +482,45 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
 
 def convert_legacy_rnn_state_dict(rnn_state_dict, rnn):
     """
-    Convert older checkpoints that stored full W_by_session matrices.
+    Convert older checkpoints that stored session-specific recurrent weights.
 
-    The full recurrent matrix is projected into the requested low-rank form
-    using a truncated SVD:
+    Older checkpoints may have full W_by_session matrices or low-rank
+    U_by_session/V_by_session factors. Those session-specific recurrent
+    matrices are averaged into one shared W, then projected into the requested
+    low-rank form using a truncated SVD:
         W ~= U @ V.T
     """
     converted = {
         key: value
         for key, value in rnn_state_dict.items()
-        if not key.startswith('W_by_session.')
+        if (
+            not key.startswith('W_by_session.')
+            and not key.startswith('U_by_session.')
+            and not key.startswith('V_by_session.')
+        )
     }
+
+    W_list = []
 
     for fx in range(rnn.n_sessions):
         legacy_key = f'W_by_session.{fx}'
-        if legacy_key not in rnn_state_dict:
-            continue
+        legacy_u_key = f'U_by_session.{fx}'
+        legacy_v_key = f'V_by_session.{fx}'
 
-        W = rnn_state_dict[legacy_key]
+        if legacy_key in rnn_state_dict:
+            W_list.append(rnn_state_dict[legacy_key])
+        elif legacy_u_key in rnn_state_dict and legacy_v_key in rnn_state_dict:
+            W_list.append(
+                rnn_state_dict[legacy_u_key] @ rnn_state_dict[legacy_v_key].T
+            )
+
+    if len(W_list) > 0:
+        W = torch.stack(W_list, dim=0).mean(dim=0)
         U_svd, S_svd, Vh_svd = torch.linalg.svd(W, full_matrices=False)
         rank = rnn.recurrent_rank
         sqrt_s = torch.sqrt(S_svd[:rank])
-        converted[f'U_by_session.{fx}'] = U_svd[:, :rank] * sqrt_s
-        converted[f'V_by_session.{fx}'] = Vh_svd[:rank, :].T * sqrt_s
+        converted['U'] = U_svd[:, :rank] * sqrt_s
+        converted['V'] = Vh_svd[:rank, :].T * sqrt_s
 
     return converted
 
@@ -534,10 +552,16 @@ def load_latent_network(
         recurrent_rank=recurrent_rank
     ).to(device)
     rnn_state_dict = checkpoint['rnn_state_dict']
-    if any(key.startswith('W_by_session.') for key in rnn_state_dict):
+    has_session_recurrent_weights = any(
+        key.startswith('W_by_session.')
+        or key.startswith('U_by_session.')
+        or key.startswith('V_by_session.')
+        for key in rnn_state_dict
+    )
+    if has_session_recurrent_weights:
         print(
-            'Converting legacy W_by_session checkpoint to '
-            f'low-rank factors with rank={recurrent_rank}.'
+            'Converting session-specific recurrent checkpoint to one shared '
+            f'low-rank recurrent matrix with rank={recurrent_rank}.'
         )
         rnn_state_dict = convert_legacy_rnn_state_dict(rnn_state_dict, rnn)
     rnn.load_state_dict(rnn_state_dict)
@@ -716,7 +740,7 @@ def plot_latent_activity_and_weights(
         vmin=-wlim,
         vmax=wlim
     )
-    plt.title(f'Recurrent weight W: fx {fx}')
+    plt.title('Shared recurrent weight W')
     plt.xlabel('from unit')
     plt.ylabel('to unit')
     plt.colorbar(fraction=0.046, pad=0.04)
