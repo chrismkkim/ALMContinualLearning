@@ -28,6 +28,7 @@ GROUPS = ['Group0', 'Group1', 'Group2', 'Group3']
 CONDITIONS = ['P1', 'A1']
 N_UNITS_PER_GROUP = 10 #10
 DEFAULT_RECURRENT_RANK = 10
+DEFAULT_READOUT_RANK = 5
 DT = 0.1
 
 
@@ -162,37 +163,70 @@ class LatentRNN(nn.Module):
 
 class SessionReadouts(nn.Module):
     """
-    One total readout matrix per session.
+    One low-rank total readout matrix per session.
 
     total_readout(fx) has shape:
         (number of original neurons in session fx, number of RNN units)
 
-    The trainable parameters are raw_total_readouts. The total readout used
-    in the model is softplus(raw_total_readouts), so every usable readout
-    entry is positive after initialization and after every optimizer update.
+    For each session, the full matrix is reconstructed by concatenating
+    three population-specific low-rank blocks:
+
+        [U_S_fx @ V_S, U_D_fx @ V_D, U_R_fx @ V_R]
+
+    U_S_fx, U_D_fx, and U_R_fx are session-specific. V_S, V_D, and V_R
+    are shared across sessions. Each factor is passed through softplus
+    before multiplication, so every reconstructed readout entry is positive.
 
     Most rows/columns are never used directly in a training loss. The
     helper build_actual_readout selects top-cell rows and masks columns.
     """
 
-    def __init__(self, cells):
+    def __init__(self, cells, readout_rank=DEFAULT_READOUT_RANK):
         super().__init__()
 
-        self.raw_total_readouts = nn.ParameterList()
+        self.readout_rank = readout_rank
+        self.n_units_per_population = len(GROUPS) * N_UNITS_PER_GROUP
+
+        if readout_rank < 1:
+            raise ValueError(f'readout_rank must be at least 1, got {readout_rank}.')
+
+        # Initialize positive factors so each population block starts near
+        # the previous dense readout scale of 0.01.
+        init_factor = np.sqrt(0.01 / readout_rank)
+        raw_init_factor = torch.log(torch.expm1(torch.tensor(init_factor)))
+
+        self.raw_V_by_type = nn.ParameterDict({
+            neuron_type: nn.Parameter(
+                raw_init_factor
+                + 0.01 * torch.randn(readout_rank, self.n_units_per_population)
+            )
+            for neuron_type in NEURON_TYPES
+        })
+
+        self.raw_U_by_session_type = nn.ModuleDict()
 
         for fx in sorted(cells):
             n_og_cells = get_num_original_cells(cells[fx])
-            init_total_readout = torch.full(
-                (n_og_cells, N_RNN_UNITS),
-                0.01
-            )
-            raw_readout_fx = nn.Parameter(
-                torch.log(torch.expm1(init_total_readout))
-            )
-            self.raw_total_readouts.append(raw_readout_fx)
+            raw_U_by_type_fx = nn.ParameterDict({
+                neuron_type: nn.Parameter(
+                    raw_init_factor
+                    + 0.01 * torch.randn(n_og_cells, readout_rank)
+                )
+                for neuron_type in NEURON_TYPES
+            })
+            self.raw_U_by_session_type[str(fx)] = raw_U_by_type_fx
 
     def total_readout(self, fx):
-        return F.softplus(self.raw_total_readouts[fx])
+        readout_blocks = []
+
+        for neuron_type in NEURON_TYPES:
+            U = F.softplus(
+                self.raw_U_by_session_type[str(fx)][neuron_type]
+            )
+            V = F.softplus(self.raw_V_by_type[neuron_type])
+            readout_blocks.append(U @ V)
+
+        return torch.cat(readout_blocks, dim=1)
 
 
 def get_num_original_cells(cells_fx):
@@ -342,6 +376,7 @@ def train_latent_network(
     n_steps=200,
     learning_rate=1e-3,
     recurrent_rank=DEFAULT_RECURRENT_RANK,
+    readout_rank=DEFAULT_READOUT_RANK,
     training_path=TRAINING_DATA_PATH,
     save_path=SAVE_LATENT_PATH,
     device='cpu',
@@ -372,9 +407,10 @@ def train_latent_network(
     ).to(device)
 
     # One readout model per independently resampled training dataset.
-    # Each readout model contains 33 session-specific total readout matrices.
+    # Each readout model contains session-specific U factors and shared
+    # S/D/R V factors.
     readouts_by_dataset = nn.ModuleList([
-        SessionReadouts(dataset['cells'])
+        SessionReadouts(dataset['cells'], readout_rank=readout_rank)
         for dataset in datasets
     ]).to(device)
 
@@ -450,7 +486,7 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
     This includes:
         - RNN parameters: low-rank W factors, h0, and
           condition-dependent input I
-        - raw_total_readouts for every dataset/session
+        - low-rank readout factors for every dataset/session
         - loss history and small model metadata
     """
     os.makedirs(save_path, exist_ok=True)
@@ -467,6 +503,7 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
             'n_time': results['rnn'].n_time,
             'n_sessions': results['rnn'].n_sessions,
             'recurrent_rank': results['rnn'].recurrent_rank,
+            'readout_rank': results['readouts_by_dataset'][0].readout_rank,
             'dt': results['rnn'].dt,
             'neuron_types': NEURON_TYPES,
             'groups': GROUPS,
@@ -525,6 +562,34 @@ def convert_legacy_rnn_state_dict(rnn_state_dict, rnn):
     return converted
 
 
+def load_readouts_state_dict(readouts_by_dataset, readouts_state_dict):
+    """
+    Load readout parameters.
+
+    Older checkpoints stored dense raw_total_readouts. Those cannot be loaded
+    into the new shared-V low-rank readout parameterization, so they are
+    skipped and the new low-rank readouts keep their initialization.
+    """
+    has_dense_readouts = any(
+        'raw_total_readouts' in key
+        for key in readouts_state_dict
+    )
+
+    if has_dense_readouts:
+        print(
+            'Skipping legacy dense raw_total_readouts; low-rank readout '
+            'factors are initialized from scratch.'
+        )
+        filtered_state_dict = {
+            key: value
+            for key, value in readouts_state_dict.items()
+            if 'raw_total_readouts' not in key
+        }
+        readouts_by_dataset.load_state_dict(filtered_state_dict, strict=False)
+    else:
+        readouts_by_dataset.load_state_dict(readouts_state_dict)
+
+
 def load_latent_network(
     checkpoint_path=os.path.join(SAVE_LATENT_PATH, 'latent_network.pt'),
     training_path=TRAINING_DATA_PATH,
@@ -543,6 +608,10 @@ def load_latent_network(
     recurrent_rank = checkpoint['config'].get(
         'recurrent_rank',
         N_RNN_UNITS
+    )
+    readout_rank = checkpoint['config'].get(
+        'readout_rank',
+        DEFAULT_READOUT_RANK
     )
 
     rnn = LatentRNN(
@@ -567,10 +636,13 @@ def load_latent_network(
     rnn.load_state_dict(rnn_state_dict)
 
     readouts_by_dataset = nn.ModuleList([
-        SessionReadouts(dataset['cells'])
+        SessionReadouts(dataset['cells'], readout_rank=readout_rank)
         for dataset in datasets
     ]).to(device)
-    readouts_by_dataset.load_state_dict(checkpoint['readouts_state_dict'])
+    load_readouts_state_dict(
+        readouts_by_dataset,
+        checkpoint['readouts_state_dict']
+    )
 
     return {
         'rnn': rnn,
@@ -762,6 +834,7 @@ if __name__ == '__main__':
     parser.add_argument('--n_steps', type=int, default=20)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--recurrent_rank', type=int, default=DEFAULT_RECURRENT_RANK)
+    parser.add_argument('--readout_rank', type=int, default=DEFAULT_READOUT_RANK)
     parser.add_argument('--condition', type=str, default='P1', choices=CONDITIONS)
     parser.add_argument('--load_only', action='store_true')
     parser.add_argument(
@@ -782,6 +855,7 @@ if __name__ == '__main__':
             n_steps=args.n_steps,
             learning_rate=args.learning_rate,
             recurrent_rank=args.recurrent_rank,
+            readout_rank=args.readout_rank,
             save_path=SAVE_LATENT_PATH
         )
         loaded_results = load_latent_network(
