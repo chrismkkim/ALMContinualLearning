@@ -239,15 +239,12 @@ def build_readout_mask(cell_rows, device):
 
 def build_actual_readout(total_readout_fx, cells_fx):
     """
-    Select top-cell rows from a session's total readout matrix and mask
-    each row to its allowed (neuron type, group) unit block.
+    Select top-cell rows from a session's total readout matrix.
 
     This function is called during every training step. Because the actual
-    readout is built from total_readout_fx using differentiable indexing
-    and multiplication by a binary mask, backprop updates only the selected
-    rows and only the unmasked columns. total_readout_fx is already positive
-    because SessionReadouts.total_readout applies softplus; masked columns
-    remain exactly zero.
+    readout is built from total_readout_fx using differentiable indexing,
+    backprop updates only the selected neuron rows. No column mask is applied,
+    so each selected neuron can use all latent units.
     """
     device = total_readout_fx.device
     cell_rows = top_cells_in_training_order(cells_fx)
@@ -257,9 +254,8 @@ def build_actual_readout(total_readout_fx, cells_fx):
         dtype=torch.long,
         device=device
     )
-    mask = build_readout_mask(cell_rows, device)
 
-    actual_readout = total_readout_fx[original_rows] * mask
+    actual_readout = total_readout_fx[original_rows]
     return actual_readout, cell_rows
 
 
