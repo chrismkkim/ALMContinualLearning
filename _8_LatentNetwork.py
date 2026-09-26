@@ -1,6 +1,7 @@
 import glob
 import os
 import argparse
+import time
 
 import numpy as np
 import torch
@@ -29,15 +30,24 @@ CONDITIONS = ['P1', 'A1']
 N_UNITS_PER_GROUP = 10 #10
 DEFAULT_RECURRENT_RANK = 10
 DEFAULT_READOUT_RANK = 5
-DEFAULT_USE_RECURRENT_V_SESSION = True
-DEFAULT_RECURRENT_V_SESSION_REGULARIZATION = 1e-3
-DEFAULT_MAX_RECURRENT_V_SESSION_FRACTION = 0.1
 DEFAULT_N_INPUT_COMPONENTS = 1
-DEFAULT_USE_INPUT_U_SESSION = True
-DEFAULT_INPUT_U_SESSION_REGULARIZATION = 1e-3
-DEFAULT_MAX_INPUT_U_SESSION_FRACTION = 0.1
 DEFAULT_DEVICE = 'cpu'
 DT = 0.1
+
+
+def latent_network_checkpoint_path(
+    recurrent_rank=DEFAULT_RECURRENT_RANK,
+    n_input_components=DEFAULT_N_INPUT_COMPONENTS,
+    readout_rank=DEFAULT_READOUT_RANK,
+    save_path=SAVE_LATENT_PATH,
+):
+    """Return the standard checkpoint path for a model configuration."""
+    filename = (
+        f'latent_network_Rec{recurrent_rank}'
+        f'_In{n_input_components}'
+        f'_Out{readout_rank}.pt'
+    )
+    return os.path.join(save_path, filename)
 
 
 def resolve_device(device=DEFAULT_DEVICE):
@@ -111,11 +121,7 @@ class LatentRNN(nn.Module):
         n_time,
         n_sessions,
         recurrent_rank=DEFAULT_RECURRENT_RANK,
-        use_recurrent_v_session=DEFAULT_USE_RECURRENT_V_SESSION,
-        max_recurrent_v_session_fraction=DEFAULT_MAX_RECURRENT_V_SESSION_FRACTION,
         n_input_components=DEFAULT_N_INPUT_COMPONENTS,
-        use_input_u_session=DEFAULT_USE_INPUT_U_SESSION,
-        max_input_u_session_fraction=DEFAULT_MAX_INPUT_U_SESSION_FRACTION,
         n_conditions=len(CONDITIONS),
         dt=DT,
     ):
@@ -125,11 +131,7 @@ class LatentRNN(nn.Module):
         self.n_time = n_time
         self.n_sessions = n_sessions
         self.recurrent_rank = recurrent_rank
-        self.use_recurrent_v_session = use_recurrent_v_session
-        self.max_recurrent_v_session_fraction = max_recurrent_v_session_fraction
         self.n_input_components = n_input_components
-        self.use_input_u_session = use_input_u_session
-        self.max_input_u_session_fraction = max_input_u_session_fraction
         self.dt = dt
 
         if recurrent_rank < 1 or recurrent_rank > n_units:
@@ -137,59 +139,41 @@ class LatentRNN(nn.Module):
                 f'recurrent_rank must be between 1 and {n_units}, '
                 f'got {recurrent_rank}.'
             )
-        if max_recurrent_v_session_fraction <= 0:
-            raise ValueError(
-                f'max_recurrent_v_session_fraction must be positive, '
-                f'got {max_recurrent_v_session_fraction}.'
-            )
         if n_input_components < 1:
             raise ValueError(
                 f'n_input_components must be at least 1, '
                 f'got {n_input_components}.'
             )
-        if max_input_u_session_fraction <= 0:
-            raise ValueError(
-                f'max_input_u_session_fraction must be positive, '
-                f'got {max_input_u_session_fraction}.'
-            )
 
-        # Sessions share U and the dominant V factor. Optionally, each session
-        # gets a capped additive perturbation to V.
+        # Each session has its own low-rank recurrent matrix W = U @ V.T.
         factor_scale = np.sqrt(0.05 / np.sqrt(recurrent_rank))
-        self.U = nn.Parameter(
-            factor_scale * torch.randn(n_units, recurrent_rank)
+        self.U_session = nn.Parameter(
+            factor_scale * torch.randn(n_sessions, n_units, recurrent_rank)
         )
-        self.V_shared = nn.Parameter(
-            factor_scale * torch.randn(n_units, recurrent_rank)
+        self.V_session = nn.Parameter(
+            factor_scale * torch.randn(n_sessions, n_units, recurrent_rank)
         )
-        if self.use_recurrent_v_session:
-            self.V_session = nn.Parameter(
-                0.01
-                * factor_scale
-                * torch.randn(n_sessions, n_units, recurrent_rank)
-            )
         self.register_buffer('h0', torch.zeros(n_conditions, n_units))
 
         input_factor_scale = np.sqrt(0.01 / n_input_components)
         self.input_vectors = nn.Parameter(
             input_factor_scale
-            * torch.randn(n_conditions, n_input_components, n_units)
-        )
-        self.u_shared = nn.Parameter(
-            input_factor_scale
-            * torch.randn(n_conditions, n_input_components, n_time)
-        )
-        if self.use_input_u_session:
-            self.u_session = nn.Parameter(
-                0.01
-                * input_factor_scale
-                * torch.randn(
-                    n_sessions,
-                    n_conditions,
-                    n_input_components,
-                    n_time
-                )
+            * torch.randn(
+                n_sessions,
+                n_conditions,
+                n_input_components,
+                n_units
             )
+        )
+        self.input_timecourses = nn.Parameter(
+            input_factor_scale
+            * torch.randn(
+                n_sessions,
+                n_conditions,
+                n_input_components,
+                n_time
+            )
+        )
 
         # The external input is trainable only in the first and last thirds.
         # Multiplying by zero in the middle third blocks gradients to
@@ -199,115 +183,6 @@ class LatentRNN(nn.Module):
         input_mask[2 * n_time // 3:] = 1.0
         self.register_buffer('input_mask', input_mask)
 
-    @property
-    def V(self):
-        """Backward-compatible alias for the shared recurrent V factor."""
-        return self.V_shared
-
-    @property
-    def use_session_v(self):
-        """Backward-compatible alias for recurrent V-session usage."""
-        return self.use_recurrent_v_session
-
-    def effective_recurrent_v_session(self, fx):
-        """
-        Return the capped session-specific V perturbation.
-
-        The cap enforces:
-            ||V_session_fx|| <=
-                max_recurrent_v_session_fraction * ||V_shared||
-        """
-        if not self.use_recurrent_v_session:
-            return torch.zeros_like(self.V_shared)
-
-        raw_delta = self.V_session[int(fx)]
-        raw_norm = raw_delta.norm()
-        max_norm = (
-            self.max_recurrent_v_session_fraction
-            * self.V_shared.norm().detach()
-        )
-        max_norm = max_norm.clamp_min(1e-8)
-        scale = torch.clamp(max_norm / raw_norm.clamp_min(1e-8), max=1.0)
-
-        return raw_delta * scale
-
-    def recurrent_v(self, fx=None):
-        """Return the shared V plus the optional session-specific perturbation."""
-        if not self.use_recurrent_v_session:
-            return self.V_shared
-        if fx is None:
-            raise ValueError('fx is required when session-specific V is enabled.')
-
-        return self.V_shared + self.effective_recurrent_v_session(fx)
-
-    def recurrent_v_session_norm_ratios(self):
-        """
-        Return ||V_session_fx|| / ||V_shared|| for each session.
-
-        The uncapped perturbation is used so the regularizer discourages the
-        learned session term from growing past the hard cap.
-        """
-        if not self.use_recurrent_v_session:
-            return self.V_shared.new_zeros(0)
-
-        shared_norm = self.V_shared.norm().detach().clamp_min(1e-8)
-        return self.V_session.flatten(start_dim=1).norm(dim=1) / shared_norm
-
-    def recurrent_v_session_regularization_loss(self):
-        """Penalize the relative size of the session-specific V component."""
-        ratios = self.recurrent_v_session_norm_ratios()
-        if ratios.numel() == 0:
-            return self.V_shared.new_tensor(0.0)
-
-        return ratios.pow(2).mean()
-
-    def project_recurrent_v_session_(self):
-        """Project session-specific V parameters to satisfy the norm cap."""
-        if not self.use_recurrent_v_session:
-            return
-
-        with torch.no_grad():
-            max_norm = (
-                self.max_recurrent_v_session_fraction
-                * self.V_shared.norm().detach().clamp_min(1e-8)
-            )
-            raw_norms = self.V_session.flatten(start_dim=1).norm(dim=1)
-            scales = torch.clamp(
-                max_norm / raw_norms.clamp_min(1e-8),
-                max=1.0
-            )
-            self.V_session.mul_(scales.view(-1, 1, 1))
-
-    def input_u(self, fx, icond):
-        """Return condition time courses u_shared + optional u_session."""
-        u = self.u_shared[icond]
-        if self.use_input_u_session:
-            u = u + self.effective_input_u_session(fx, icond)
-
-        return u
-
-    def effective_input_u_session(self, fx, icond):
-        """
-        Return the capped session-specific input time-course perturbation.
-
-        The cap enforces:
-            ||u_session_fx|| <=
-                max_input_u_session_fraction * ||u_shared||
-        """
-        if not self.use_input_u_session:
-            return torch.zeros_like(self.u_shared[icond])
-
-        raw_delta = self.u_session[int(fx), icond]
-        raw_norm = raw_delta.norm()
-        max_norm = (
-            self.max_input_u_session_fraction
-            * self.u_shared.norm().detach()
-        )
-        max_norm = max_norm.clamp_min(1e-8)
-        scale = torch.clamp(max_norm / raw_norm.clamp_min(1e-8), max=1.0)
-
-        return raw_delta * scale
-
     def condition_input(self, fx, icond):
         """
         Return masked external input over time for one session and condition.
@@ -315,58 +190,26 @@ class LatentRNN(nn.Module):
         Shape:
             (n_time, n_units)
         """
+        fx = int(fx)
         input_over_time = torch.einsum(
             'ku,kt->tu',
-            self.input_vectors[icond],
-            self.input_u(fx, icond)
+            self.input_vectors[fx, icond],
+            self.input_timecourses[fx, icond]
         )
 
         return input_over_time * self.input_mask[:, None]
-
-    def input_u_session_norm_ratios(self):
-        """
-        Return ||u_session_fx|| / ||u_shared|| for each session.
-
-        The uncapped perturbation is used so the regularizer discourages the
-        learned session term from growing past the hard cap.
-        """
-        if not self.use_input_u_session:
-            return self.u_shared.new_zeros(0)
-
-        shared_norm = self.u_shared.norm().detach().clamp_min(1e-8)
-        return self.u_session.flatten(start_dim=1).norm(dim=1) / shared_norm
-
-    def input_u_session_regularization_loss(self):
-        """Penalize the relative size of session-specific input time courses."""
-        ratios = self.input_u_session_norm_ratios()
-        if ratios.numel() == 0:
-            return self.u_shared.new_tensor(0.0)
-
-        return ratios.pow(2).mean()
-
-    def project_input_u_session_(self):
-        """Project session-specific input time courses to satisfy the norm cap."""
-        if not self.use_input_u_session:
-            return
-
-        with torch.no_grad():
-            max_norm = (
-                self.max_input_u_session_fraction
-                * self.u_shared.norm().detach().clamp_min(1e-8)
-            )
-            raw_norms = self.u_session.flatten(start_dim=1).norm(dim=1)
-            scales = torch.clamp(
-                max_norm / raw_norms.clamp_min(1e-8),
-                max=1.0
-            )
-            self.u_session.mul_(scales.view(-1, 1, 1, 1))
 
     def recurrent_weight(self, fx=None):
         """
         Return the rank-constrained recurrent matrix for one session.
         """
-        V = self.recurrent_v(fx)
-        return self.U @ V.T
+        if fx is None:
+            raise ValueError('fx is required for session-specific recurrent weights.')
+
+        fx = int(fx)
+        U = self.U_session[fx]
+        V = self.V_session[fx]
+        return U @ V.T
         
     def forward(self, fx):
         """
@@ -422,11 +265,11 @@ class SessionReadouts(nn.Module):
     For each session, the full matrix is reconstructed by concatenating
     three population-specific low-rank blocks:
 
-        [U_S_fx @ V_S, U_D_fx @ V_D, U_R_fx @ V_R]
+        [U_S_fx @ V_S_fx, U_D_fx @ V_D_fx, U_R_fx @ V_R_fx]
 
-    U_S_fx, U_D_fx, and U_R_fx are session-specific. V_S, V_D, and V_R
-    are shared across sessions. Each factor is passed through softplus
-    before multiplication, so every reconstructed readout entry is positive.
+    Both U and V factors are session-specific. Each factor is passed through
+    softplus before multiplication, so every reconstructed readout entry is
+    positive.
 
     Most rows/columns are never used directly in a training loss. The
     helper build_actual_readout selects top-cell rows and masks columns.
@@ -446,15 +289,8 @@ class SessionReadouts(nn.Module):
         init_factor = np.sqrt(0.01 / readout_rank)
         raw_init_factor = torch.log(torch.expm1(torch.tensor(init_factor)))
 
-        self.raw_V_by_type = nn.ParameterDict({
-            neuron_type: nn.Parameter(
-                raw_init_factor
-                + 0.01 * torch.randn(readout_rank, self.n_units_per_population)
-            )
-            for neuron_type in NEURON_TYPES
-        })
-
         self.raw_U_by_session_type = nn.ModuleDict()
+        self.raw_V_by_session_type = nn.ModuleDict()
 
         for fx in sorted(cells):
             n_og_cells = get_num_original_cells(cells[fx])
@@ -465,7 +301,18 @@ class SessionReadouts(nn.Module):
                 )
                 for neuron_type in NEURON_TYPES
             })
+            raw_V_by_type_fx = nn.ParameterDict({
+                neuron_type: nn.Parameter(
+                    raw_init_factor
+                    + 0.01 * torch.randn(
+                        readout_rank,
+                        self.n_units_per_population
+                    )
+                )
+                for neuron_type in NEURON_TYPES
+            })
             self.raw_U_by_session_type[str(fx)] = raw_U_by_type_fx
+            self.raw_V_by_session_type[str(fx)] = raw_V_by_type_fx
 
     def total_readout(self, fx):
         readout_blocks = []
@@ -474,7 +321,9 @@ class SessionReadouts(nn.Module):
             U = F.softplus(
                 self.raw_U_by_session_type[str(fx)][neuron_type]
             )
-            V = F.softplus(self.raw_V_by_type[neuron_type])
+            V = F.softplus(
+                self.raw_V_by_session_type[str(fx)][neuron_type]
+            )
             readout_blocks.append(U @ V)
 
         return torch.cat(readout_blocks, dim=1)
@@ -627,13 +476,7 @@ def train_latent_network(
     n_steps=200,
     learning_rate=1e-3,
     recurrent_rank=DEFAULT_RECURRENT_RANK,
-    use_recurrent_v_session=DEFAULT_USE_RECURRENT_V_SESSION,
-    recurrent_v_session_regularization=DEFAULT_RECURRENT_V_SESSION_REGULARIZATION,
-    max_recurrent_v_session_fraction=DEFAULT_MAX_RECURRENT_V_SESSION_FRACTION,
     n_input_components=DEFAULT_N_INPUT_COMPONENTS,
-    use_input_u_session=DEFAULT_USE_INPUT_U_SESSION,
-    input_u_session_regularization=DEFAULT_INPUT_U_SESSION_REGULARIZATION,
-    max_input_u_session_fraction=DEFAULT_MAX_INPUT_U_SESSION_FRACTION,
     readout_rank=DEFAULT_READOUT_RANK,
     training_path=TRAINING_DATA_PATH,
     save_path=SAVE_LATENT_PATH,
@@ -663,16 +506,11 @@ def train_latent_network(
         n_time,
         n_sessions,
         recurrent_rank=recurrent_rank,
-        use_recurrent_v_session=use_recurrent_v_session,
-        max_recurrent_v_session_fraction=max_recurrent_v_session_fraction,
-        n_input_components=n_input_components,
-        use_input_u_session=use_input_u_session,
-        max_input_u_session_fraction=max_input_u_session_fraction
+        n_input_components=n_input_components
     ).to(device)
 
     # One readout model per independently resampled training dataset.
-    # Each readout model contains session-specific U factors and shared
-    # S/D/R V factors.
+    # Each readout model contains session-specific U and V factors.
     readouts_by_dataset = nn.ModuleList([
         SessionReadouts(dataset['cells'], readout_rank=readout_rank)
         for dataset in datasets
@@ -684,6 +522,7 @@ def train_latent_network(
     )
 
     loss_history = []
+    training_start_time = time.time()
 
     for step in range(n_steps):
         optimizer.zero_grad()
@@ -720,35 +559,22 @@ def train_latent_network(
                     n_terms += 1
 
         loss = loss / n_terms
-        if use_recurrent_v_session and recurrent_v_session_regularization > 0:
-            loss = (
-                loss
-                + recurrent_v_session_regularization
-                * rnn.recurrent_v_session_regularization_loss()
-            )
-        if use_input_u_session and input_u_session_regularization > 0:
-            loss = (
-                loss
-                + input_u_session_regularization
-                * rnn.input_u_session_regularization_loss()
-            )
         loss.backward()
         optimizer.step()
-        rnn.project_recurrent_v_session_()
-        rnn.project_input_u_session_()
 
         loss_history.append(float(loss.detach().cpu()))
 
         if step % 50 == 0:
             print(f'step {step:04d} | loss {loss_history[-1]:.6f}')
+        if step == 49:
+            estimated_minutes = (time.time() - training_start_time) * n_steps / 50 / 60
+            print(f'estimated total training time: {estimated_minutes:.1f} minutes')
 
     results = {
         'rnn': rnn,
         'readouts_by_dataset': readouts_by_dataset,
         'loss_history': loss_history,
         'datasets': datasets,
-        'recurrent_v_session_regularization': recurrent_v_session_regularization,
-        'input_u_session_regularization': input_u_session_regularization,
     }
     save_latent_network(results, save_path=save_path)
     return results
@@ -769,8 +595,12 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
         - loss history and small model metadata
     """
     os.makedirs(save_path, exist_ok=True)
-    checkpoint_path = os.path.join(save_path, 'latent_network.pt')
-
+    checkpoint_path = latent_network_checkpoint_path(
+        recurrent_rank=results['rnn'].recurrent_rank,
+        n_input_components=results['rnn'].n_input_components,
+        readout_rank=results['readouts_by_dataset'][0].readout_rank,
+        save_path=save_path,
+    )
     checkpoint = {
         'rnn_state_dict': results['rnn'].state_dict(),
         'readouts_state_dict': results['readouts_by_dataset'].state_dict(),
@@ -782,32 +612,15 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
             'n_time': results['rnn'].n_time,
             'n_sessions': results['rnn'].n_sessions,
             'recurrent_rank': results['rnn'].recurrent_rank,
-            'use_recurrent_v_session': results['rnn'].use_recurrent_v_session,
-            'recurrent_v_session_regularization': results.get(
-                'recurrent_v_session_regularization',
-                DEFAULT_RECURRENT_V_SESSION_REGULARIZATION
-            ),
-            'max_recurrent_v_session_fraction': (
-                results['rnn'].max_recurrent_v_session_fraction
-            ),
             'n_input_components': results['rnn'].n_input_components,
-            'use_input_u_session': results['rnn'].use_input_u_session,
-            'input_u_session_regularization': results.get(
-                'input_u_session_regularization',
-                DEFAULT_INPUT_U_SESSION_REGULARIZATION
-            ),
-            'max_input_u_session_fraction': (
-                results['rnn'].max_input_u_session_fraction
-            ),
             'readout_rank': results['readouts_by_dataset'][0].readout_rank,
             'dt': results['rnn'].dt,
             'neuron_types': NEURON_TYPES,
             'groups': GROUPS,
             'conditions': CONDITIONS,
-            'shared_recurrent_u': True,
-            'shared_recurrent_weight': (
-                not results['rnn'].use_recurrent_v_session
-            ),
+            'session_specific_recurrent_factors': True,
+            'session_specific_input_factors': True,
+            'session_specific_readout_factors': True,
         },
     }
 
@@ -816,113 +629,8 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
     print(f'Saved latent network to {checkpoint_path}')
 
 
-def convert_legacy_rnn_state_dict(rnn_state_dict, rnn):
-    """
-    Convert older checkpoints that stored session-specific recurrent weights.
-
-    Older checkpoints may have full W_by_session matrices or low-rank
-    U_by_session/V_by_session factors. Those session-specific recurrent
-    matrices are averaged into one shared W, then projected into the requested
-    low-rank form using a truncated SVD:
-        W ~= U @ V.T
-    """
-    converted = {
-        key: value
-        for key, value in rnn_state_dict.items()
-        if (
-            not key.startswith('W_by_session.')
-            and not key.startswith('U_by_session.')
-            and not key.startswith('V_by_session.')
-        )
-    }
-    if 'V' in converted and 'V_shared' not in converted:
-        converted['V_shared'] = converted.pop('V')
-
-    W_list = []
-
-    for fx in range(rnn.n_sessions):
-        legacy_key = f'W_by_session.{fx}'
-        legacy_u_key = f'U_by_session.{fx}'
-        legacy_v_key = f'V_by_session.{fx}'
-
-        if legacy_key in rnn_state_dict:
-            W_list.append(rnn_state_dict[legacy_key])
-        elif legacy_u_key in rnn_state_dict and legacy_v_key in rnn_state_dict:
-            W_list.append(
-                rnn_state_dict[legacy_u_key] @ rnn_state_dict[legacy_v_key].T
-            )
-
-    if len(W_list) > 0:
-        W = torch.stack(W_list, dim=0).mean(dim=0)
-        U_svd, S_svd, Vh_svd = torch.linalg.svd(W, full_matrices=False)
-        rank = rnn.recurrent_rank
-        sqrt_s = torch.sqrt(S_svd[:rank])
-        converted['U'] = U_svd[:, :rank] * sqrt_s
-        converted['V_shared'] = Vh_svd[:rank, :].T * sqrt_s
-
-    return converted
-
-
-def rename_legacy_shared_v(rnn_state_dict):
-    """Rename old shared recurrent V key to the current V_shared key."""
-    if 'V' not in rnn_state_dict or 'V_shared' in rnn_state_dict:
-        return rnn_state_dict
-
-    renamed = dict(rnn_state_dict)
-    renamed['V_shared'] = renamed.pop('V')
-    return renamed
-
-
-def prepare_rnn_state_dict_for_load(rnn_state_dict):
-    """
-    Drop obsolete trainable initial/input tensors before loading.
-
-    h0 is now a fixed zero buffer, and old dense input_by_condition tensors
-    do not map onto the factorized input parameterization.
-    """
-    prepared = dict(rnn_state_dict)
-    prepared.pop('h0', None)
-
-    if 'input_by_condition' in prepared:
-        print(
-            'Skipping legacy dense input_by_condition; factorized input '
-            'parameters are initialized from scratch.'
-        )
-        prepared.pop('input_by_condition')
-
-    return prepared
-
-
-def load_readouts_state_dict(readouts_by_dataset, readouts_state_dict):
-    """
-    Load readout parameters.
-
-    Older checkpoints stored dense raw_total_readouts. Those cannot be loaded
-    into the new shared-V low-rank readout parameterization, so they are
-    skipped and the new low-rank readouts keep their initialization.
-    """
-    has_dense_readouts = any(
-        'raw_total_readouts' in key
-        for key in readouts_state_dict
-    )
-
-    if has_dense_readouts:
-        print(
-            'Skipping legacy dense raw_total_readouts; low-rank readout '
-            'factors are initialized from scratch.'
-        )
-        filtered_state_dict = {
-            key: value
-            for key, value in readouts_state_dict.items()
-            if 'raw_total_readouts' not in key
-        }
-        readouts_by_dataset.load_state_dict(filtered_state_dict, strict=False)
-    else:
-        readouts_by_dataset.load_state_dict(readouts_state_dict)
-
-
 def load_latent_network(
-    checkpoint_path=os.path.join(SAVE_LATENT_PATH, 'latent_network.pt'),
+    checkpoint_path=latent_network_checkpoint_path(),
     training_path=TRAINING_DATA_PATH,
     device=DEFAULT_DEVICE,
 ):
@@ -941,28 +649,9 @@ def load_latent_network(
         'recurrent_rank',
         N_RNN_UNITS
     )
-    use_recurrent_v_session = checkpoint['config'].get(
-        'use_recurrent_v_session',
-        checkpoint['config'].get('use_session_v', False)
-    )
-    max_recurrent_v_session_fraction = checkpoint['config'].get(
-        'max_recurrent_v_session_fraction',
-        checkpoint['config'].get(
-            'max_v_session_fraction',
-            DEFAULT_MAX_RECURRENT_V_SESSION_FRACTION
-        )
-    )
     n_input_components = checkpoint['config'].get(
         'n_input_components',
         DEFAULT_N_INPUT_COMPONENTS
-    )
-    use_input_u_session = checkpoint['config'].get(
-        'use_input_u_session',
-        False
-    )
-    max_input_u_session_fraction = checkpoint['config'].get(
-        'max_input_u_session_fraction',
-        DEFAULT_MAX_INPUT_U_SESSION_FRACTION
     )
     readout_rank = checkpoint['config'].get(
         'readout_rank',
@@ -974,38 +663,15 @@ def load_latent_network(
         n_time,
         n_sessions,
         recurrent_rank=recurrent_rank,
-        use_recurrent_v_session=use_recurrent_v_session,
-        max_recurrent_v_session_fraction=max_recurrent_v_session_fraction,
-        n_input_components=n_input_components,
-        use_input_u_session=use_input_u_session,
-        max_input_u_session_fraction=max_input_u_session_fraction
+        n_input_components=n_input_components
     ).to(device)
-    rnn_state_dict = checkpoint['rnn_state_dict']
-    has_session_recurrent_weights = any(
-        key.startswith('W_by_session.')
-        or key.startswith('U_by_session.')
-        or key.startswith('V_by_session.')
-        for key in rnn_state_dict
-    )
-    if has_session_recurrent_weights:
-        print(
-            'Converting session-specific recurrent checkpoint to one shared '
-            f'low-rank recurrent matrix with rank={recurrent_rank}.'
-        )
-        rnn_state_dict = convert_legacy_rnn_state_dict(rnn_state_dict, rnn)
-    else:
-        rnn_state_dict = rename_legacy_shared_v(rnn_state_dict)
-    rnn_state_dict = prepare_rnn_state_dict_for_load(rnn_state_dict)
-    rnn.load_state_dict(rnn_state_dict, strict=False)
+    rnn.load_state_dict(checkpoint['rnn_state_dict'])
 
     readouts_by_dataset = nn.ModuleList([
         SessionReadouts(dataset['cells'], readout_rank=readout_rank)
         for dataset in datasets
     ]).to(device)
-    load_readouts_state_dict(
-        readouts_by_dataset,
-        checkpoint['readouts_state_dict']
-    )
+    readouts_by_dataset.load_state_dict(checkpoint['readouts_state_dict'])
 
     return {
         'rnn': rnn,
@@ -1175,10 +841,7 @@ def plot_latent_activity_and_weights(
         vmin=-wlim,
         vmax=wlim
     )
-    if rnn.use_recurrent_v_session:
-        plt.title(f'Session recurrent weight W: fx {fx}')
-    else:
-        plt.title('Shared recurrent weight W')
+    plt.title(f'Session recurrent weight W: fx {fx}')
     plt.xlabel('from unit')
     plt.ylabel('to unit')
     plt.colorbar(fraction=0.046, pad=0.04)
@@ -1207,40 +870,9 @@ if __name__ == '__main__':
     )
     parser.add_argument('--recurrent_rank', type=int, default=DEFAULT_RECURRENT_RANK)
     parser.add_argument(
-        '--drop_recurrent_v_session',
-        '--drop_session_v',
-        dest='drop_recurrent_v_session',
-        action='store_true'
-    )
-    parser.add_argument(
-        '--recurrent_v_session_regularization',
-        '--v_session_regularization',
-        dest='recurrent_v_session_regularization',
-        type=float,
-        default=DEFAULT_RECURRENT_V_SESSION_REGULARIZATION
-    )
-    parser.add_argument(
-        '--max_recurrent_v_session_fraction',
-        '--max_v_session_fraction',
-        dest='max_recurrent_v_session_fraction',
-        type=float,
-        default=DEFAULT_MAX_RECURRENT_V_SESSION_FRACTION
-    )
-    parser.add_argument(
         '--n_input_components',
         type=int,
         default=DEFAULT_N_INPUT_COMPONENTS
-    )
-    parser.add_argument('--drop_input_u_session', action='store_true')
-    parser.add_argument(
-        '--input_u_session_regularization',
-        type=float,
-        default=DEFAULT_INPUT_U_SESSION_REGULARIZATION
-    )
-    parser.add_argument(
-        '--max_input_u_session_fraction',
-        type=float,
-        default=DEFAULT_MAX_INPUT_U_SESSION_FRACTION
     )
     parser.add_argument('--readout_rank', type=int, default=DEFAULT_READOUT_RANK)
     parser.add_argument('--condition', type=str, default='P1', choices=CONDITIONS)
@@ -1248,11 +880,20 @@ if __name__ == '__main__':
     parser.add_argument(
         '--checkpoint_path',
         type=str,
-        default=os.path.join(SAVE_LATENT_PATH, 'latent_network.pt')
+        default=None,
+        help='Checkpoint path. Defaults to the rank/input/readout-based name.'
     )
     parser.add_argument('--dataset_idx', type=int, default=0)
     parser.add_argument('--fx', type=int, default=0)
     args = parser.parse_args()
+
+    if args.checkpoint_path is None:
+        args.checkpoint_path = latent_network_checkpoint_path(
+            recurrent_rank=args.recurrent_rank,
+            n_input_components=args.n_input_components,
+            readout_rank=args.readout_rank,
+            save_path=SAVE_LATENT_PATH,
+        )
 
     if args.load_only:
         loaded_results = load_latent_network(
@@ -1260,39 +901,16 @@ if __name__ == '__main__':
             device=args.device
         )
     else:
-        train_latent_network(
+        trained_results = train_latent_network(
             n_steps=args.n_steps,
             learning_rate=args.learning_rate,
             recurrent_rank=args.recurrent_rank,
-            use_recurrent_v_session=not args.drop_recurrent_v_session,
-            recurrent_v_session_regularization=(
-                args.recurrent_v_session_regularization
-            ),
-            max_recurrent_v_session_fraction=(
-                args.max_recurrent_v_session_fraction
-            ),
             n_input_components=args.n_input_components,
-            use_input_u_session=not args.drop_input_u_session,
-            input_u_session_regularization=args.input_u_session_regularization,
-            max_input_u_session_fraction=args.max_input_u_session_fraction,
             readout_rank=args.readout_rank,
             save_path=SAVE_LATENT_PATH,
             device=args.device
         )
         loaded_results = load_latent_network(
-            checkpoint_path=args.checkpoint_path,
+            checkpoint_path=trained_results['checkpoint_path'],
             device=args.device
         )
-
-    plot_prediction_vs_target(
-        loaded_results,
-        dataset_idx=args.dataset_idx,
-        fx=args.fx,
-        condition=args.condition,
-    )
-
-    plot_latent_activity_and_weights(
-        loaded_results,
-        fx=args.fx,
-        condition=args.condition,
-    )
