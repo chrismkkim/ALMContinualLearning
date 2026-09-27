@@ -40,6 +40,21 @@ DEFAULT_DEVICE = 'cpu'
 DT = 0.1
 
 
+def latent_network_checkpoint_path(
+    recurrent_rank=DEFAULT_RECURRENT_RANK,
+    n_input_components=DEFAULT_N_INPUT_COMPONENTS,
+    readout_rank=DEFAULT_READOUT_RANK,
+    save_path=SAVE_LATENT_PATH,
+):
+    """Return the standard checkpoint path for a latent-network config."""
+    filename = (
+        f'latent_hybrid_Rec{recurrent_rank}'
+        f'_In{n_input_components}'
+        f'_Out{readout_rank}.pt'
+    )
+    return os.path.join(save_path, filename)
+
+
 def resolve_device(device=DEFAULT_DEVICE):
     """Return a torch.device after validating requested CPU/GPU support."""
     if isinstance(device, torch.device):
@@ -198,16 +213,6 @@ class LatentRNN(nn.Module):
         input_mask[: n_time // 3] = 1.0
         input_mask[2 * n_time // 3:] = 1.0
         self.register_buffer('input_mask', input_mask)
-
-    @property
-    def V(self):
-        """Backward-compatible alias for the shared recurrent V factor."""
-        return self.V_shared
-
-    @property
-    def use_session_v(self):
-        """Backward-compatible alias for recurrent V-session usage."""
-        return self.use_recurrent_v_session
 
     def effective_recurrent_v_session(self, fx):
         """
@@ -769,7 +774,12 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
         - loss history and small model metadata
     """
     os.makedirs(save_path, exist_ok=True)
-    checkpoint_path = os.path.join(save_path, 'latent_network.pt')
+    checkpoint_path = latent_network_checkpoint_path(
+        recurrent_rank=results['rnn'].recurrent_rank,
+        n_input_components=results['rnn'].n_input_components,
+        readout_rank=results['readouts_by_dataset'][0].readout_rank,
+        save_path=save_path,
+    )
 
     checkpoint = {
         'rnn_state_dict': results['rnn'].state_dict(),
@@ -816,113 +826,8 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
     print(f'Saved latent network to {checkpoint_path}')
 
 
-def convert_legacy_rnn_state_dict(rnn_state_dict, rnn):
-    """
-    Convert older checkpoints that stored session-specific recurrent weights.
-
-    Older checkpoints may have full W_by_session matrices or low-rank
-    U_by_session/V_by_session factors. Those session-specific recurrent
-    matrices are averaged into one shared W, then projected into the requested
-    low-rank form using a truncated SVD:
-        W ~= U @ V.T
-    """
-    converted = {
-        key: value
-        for key, value in rnn_state_dict.items()
-        if (
-            not key.startswith('W_by_session.')
-            and not key.startswith('U_by_session.')
-            and not key.startswith('V_by_session.')
-        )
-    }
-    if 'V' in converted and 'V_shared' not in converted:
-        converted['V_shared'] = converted.pop('V')
-
-    W_list = []
-
-    for fx in range(rnn.n_sessions):
-        legacy_key = f'W_by_session.{fx}'
-        legacy_u_key = f'U_by_session.{fx}'
-        legacy_v_key = f'V_by_session.{fx}'
-
-        if legacy_key in rnn_state_dict:
-            W_list.append(rnn_state_dict[legacy_key])
-        elif legacy_u_key in rnn_state_dict and legacy_v_key in rnn_state_dict:
-            W_list.append(
-                rnn_state_dict[legacy_u_key] @ rnn_state_dict[legacy_v_key].T
-            )
-
-    if len(W_list) > 0:
-        W = torch.stack(W_list, dim=0).mean(dim=0)
-        U_svd, S_svd, Vh_svd = torch.linalg.svd(W, full_matrices=False)
-        rank = rnn.recurrent_rank
-        sqrt_s = torch.sqrt(S_svd[:rank])
-        converted['U'] = U_svd[:, :rank] * sqrt_s
-        converted['V_shared'] = Vh_svd[:rank, :].T * sqrt_s
-
-    return converted
-
-
-def rename_legacy_shared_v(rnn_state_dict):
-    """Rename old shared recurrent V key to the current V_shared key."""
-    if 'V' not in rnn_state_dict or 'V_shared' in rnn_state_dict:
-        return rnn_state_dict
-
-    renamed = dict(rnn_state_dict)
-    renamed['V_shared'] = renamed.pop('V')
-    return renamed
-
-
-def prepare_rnn_state_dict_for_load(rnn_state_dict):
-    """
-    Drop obsolete trainable initial/input tensors before loading.
-
-    h0 is now a fixed zero buffer, and old dense input_by_condition tensors
-    do not map onto the factorized input parameterization.
-    """
-    prepared = dict(rnn_state_dict)
-    prepared.pop('h0', None)
-
-    if 'input_by_condition' in prepared:
-        print(
-            'Skipping legacy dense input_by_condition; factorized input '
-            'parameters are initialized from scratch.'
-        )
-        prepared.pop('input_by_condition')
-
-    return prepared
-
-
-def load_readouts_state_dict(readouts_by_dataset, readouts_state_dict):
-    """
-    Load readout parameters.
-
-    Older checkpoints stored dense raw_total_readouts. Those cannot be loaded
-    into the new shared-V low-rank readout parameterization, so they are
-    skipped and the new low-rank readouts keep their initialization.
-    """
-    has_dense_readouts = any(
-        'raw_total_readouts' in key
-        for key in readouts_state_dict
-    )
-
-    if has_dense_readouts:
-        print(
-            'Skipping legacy dense raw_total_readouts; low-rank readout '
-            'factors are initialized from scratch.'
-        )
-        filtered_state_dict = {
-            key: value
-            for key, value in readouts_state_dict.items()
-            if 'raw_total_readouts' not in key
-        }
-        readouts_by_dataset.load_state_dict(filtered_state_dict, strict=False)
-    else:
-        readouts_by_dataset.load_state_dict(readouts_state_dict)
-
-
 def load_latent_network(
-    checkpoint_path=os.path.join(SAVE_LATENT_PATH, 'latent_network.pt'),
+    checkpoint_path=latent_network_checkpoint_path(),
     training_path=TRAINING_DATA_PATH,
     device=DEFAULT_DEVICE,
 ):
@@ -937,37 +842,17 @@ def load_latent_network(
     checkpoint = torch.load(checkpoint_path, map_location=device)
     n_time = checkpoint['config']['n_time']
     n_sessions = checkpoint['config']['n_sessions']
-    recurrent_rank = checkpoint['config'].get(
-        'recurrent_rank',
-        N_RNN_UNITS
+    recurrent_rank = checkpoint['config']['recurrent_rank']
+    use_recurrent_v_session = checkpoint['config']['use_recurrent_v_session']
+    max_recurrent_v_session_fraction = (
+        checkpoint['config']['max_recurrent_v_session_fraction']
     )
-    use_recurrent_v_session = checkpoint['config'].get(
-        'use_recurrent_v_session',
-        checkpoint['config'].get('use_session_v', False)
+    n_input_components = checkpoint['config']['n_input_components']
+    use_input_u_session = checkpoint['config']['use_input_u_session']
+    max_input_u_session_fraction = (
+        checkpoint['config']['max_input_u_session_fraction']
     )
-    max_recurrent_v_session_fraction = checkpoint['config'].get(
-        'max_recurrent_v_session_fraction',
-        checkpoint['config'].get(
-            'max_v_session_fraction',
-            DEFAULT_MAX_RECURRENT_V_SESSION_FRACTION
-        )
-    )
-    n_input_components = checkpoint['config'].get(
-        'n_input_components',
-        DEFAULT_N_INPUT_COMPONENTS
-    )
-    use_input_u_session = checkpoint['config'].get(
-        'use_input_u_session',
-        False
-    )
-    max_input_u_session_fraction = checkpoint['config'].get(
-        'max_input_u_session_fraction',
-        DEFAULT_MAX_INPUT_U_SESSION_FRACTION
-    )
-    readout_rank = checkpoint['config'].get(
-        'readout_rank',
-        DEFAULT_READOUT_RANK
-    )
+    readout_rank = checkpoint['config']['readout_rank']
 
     rnn = LatentRNN(
         N_RNN_UNITS,
@@ -980,32 +865,13 @@ def load_latent_network(
         use_input_u_session=use_input_u_session,
         max_input_u_session_fraction=max_input_u_session_fraction
     ).to(device)
-    rnn_state_dict = checkpoint['rnn_state_dict']
-    has_session_recurrent_weights = any(
-        key.startswith('W_by_session.')
-        or key.startswith('U_by_session.')
-        or key.startswith('V_by_session.')
-        for key in rnn_state_dict
-    )
-    if has_session_recurrent_weights:
-        print(
-            'Converting session-specific recurrent checkpoint to one shared '
-            f'low-rank recurrent matrix with rank={recurrent_rank}.'
-        )
-        rnn_state_dict = convert_legacy_rnn_state_dict(rnn_state_dict, rnn)
-    else:
-        rnn_state_dict = rename_legacy_shared_v(rnn_state_dict)
-    rnn_state_dict = prepare_rnn_state_dict_for_load(rnn_state_dict)
-    rnn.load_state_dict(rnn_state_dict, strict=False)
+    rnn.load_state_dict(checkpoint['rnn_state_dict'])
 
     readouts_by_dataset = nn.ModuleList([
         SessionReadouts(dataset['cells'], readout_rank=readout_rank)
         for dataset in datasets
     ]).to(device)
-    load_readouts_state_dict(
-        readouts_by_dataset,
-        checkpoint['readouts_state_dict']
-    )
+    readouts_by_dataset.load_state_dict(checkpoint['readouts_state_dict'])
 
     return {
         'rnn': rnn,
@@ -1208,21 +1074,15 @@ if __name__ == '__main__':
     parser.add_argument('--recurrent_rank', type=int, default=DEFAULT_RECURRENT_RANK)
     parser.add_argument(
         '--drop_recurrent_v_session',
-        '--drop_session_v',
-        dest='drop_recurrent_v_session',
         action='store_true'
     )
     parser.add_argument(
         '--recurrent_v_session_regularization',
-        '--v_session_regularization',
-        dest='recurrent_v_session_regularization',
         type=float,
         default=DEFAULT_RECURRENT_V_SESSION_REGULARIZATION
     )
     parser.add_argument(
         '--max_recurrent_v_session_fraction',
-        '--max_v_session_fraction',
-        dest='max_recurrent_v_session_fraction',
         type=float,
         default=DEFAULT_MAX_RECURRENT_V_SESSION_FRACTION
     )
@@ -1248,11 +1108,20 @@ if __name__ == '__main__':
     parser.add_argument(
         '--checkpoint_path',
         type=str,
-        default=os.path.join(SAVE_LATENT_PATH, 'latent_network.pt')
+        default=None,
+        help='Checkpoint path. Defaults to the hybrid rank/input/readout name.'
     )
     parser.add_argument('--dataset_idx', type=int, default=0)
     parser.add_argument('--fx', type=int, default=0)
     args = parser.parse_args()
+
+    if args.checkpoint_path is None:
+        args.checkpoint_path = latent_network_checkpoint_path(
+            recurrent_rank=args.recurrent_rank,
+            n_input_components=args.n_input_components,
+            readout_rank=args.readout_rank,
+            save_path=SAVE_LATENT_PATH,
+        )
 
     if args.load_only:
         loaded_results = load_latent_network(
@@ -1260,7 +1129,7 @@ if __name__ == '__main__':
             device=args.device
         )
     else:
-        train_latent_network(
+        trained_results = train_latent_network(
             n_steps=args.n_steps,
             learning_rate=args.learning_rate,
             recurrent_rank=args.recurrent_rank,
@@ -1280,7 +1149,7 @@ if __name__ == '__main__':
             device=args.device
         )
         loaded_results = load_latent_network(
-            checkpoint_path=args.checkpoint_path,
+            checkpoint_path=trained_results['checkpoint_path'],
             device=args.device
         )
 
