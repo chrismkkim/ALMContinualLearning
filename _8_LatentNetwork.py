@@ -46,9 +46,9 @@ def latent_network_checkpoint_path(
     readout_rank=DEFAULT_READOUT_RANK,
     save_path=SAVE_LATENT_PATH,
     use_recurrent_v_session=DEFAULT_USE_RECURRENT_V_SESSION,
-    recurrent_v_session_regularization=DEFAULT_RECURRENT_V_SESSION_REGULARIZATION,
+    max_recurrent_v_session_fraction=DEFAULT_MAX_RECURRENT_V_SESSION_FRACTION,
     use_input_u_session=DEFAULT_USE_INPUT_U_SESSION,
-    input_u_session_regularization=DEFAULT_INPUT_U_SESSION_REGULARIZATION,
+    max_input_u_session_fraction=DEFAULT_MAX_INPUT_U_SESSION_FRACTION,
 ):
     """Return the standard checkpoint path for a latent-network config."""
     filename_stem = (
@@ -61,8 +61,8 @@ def latent_network_checkpoint_path(
         save_path = os.path.join(save_path, 'hybrid')
         filename = (
             f'{filename_stem}'
-            f'_RegRec{recurrent_v_session_regularization:g}'
-            f'_RegIn{input_u_session_regularization:g}.pt'
+            f'_FracRec{max_recurrent_v_session_fraction:g}'
+            f'_FracIn{max_input_u_session_fraction:g}.pt'
         )
     elif not use_recurrent_v_session and not use_input_u_session:
         save_path = os.path.join(save_path, 'shared')
@@ -797,14 +797,12 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
         readout_rank=results['readouts_by_dataset'][0].readout_rank,
         save_path=save_path,
         use_recurrent_v_session=results['rnn'].use_recurrent_v_session,
-        recurrent_v_session_regularization=results.get(
-            'recurrent_v_session_regularization',
-            DEFAULT_RECURRENT_V_SESSION_REGULARIZATION
+        max_recurrent_v_session_fraction=(
+            results['rnn'].max_recurrent_v_session_fraction
         ),
         use_input_u_session=results['rnn'].use_input_u_session,
-        input_u_session_regularization=results.get(
-            'input_u_session_regularization',
-            DEFAULT_INPUT_U_SESSION_REGULARIZATION
+        max_input_u_session_fraction=(
+            results['rnn'].max_input_u_session_fraction
         ),
     )
     os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
@@ -1150,11 +1148,11 @@ if __name__ == '__main__':
             readout_rank=args.readout_rank,
             save_path=SAVE_LATENT_PATH,
             use_recurrent_v_session=not args.drop_recurrent_v_session,
-            recurrent_v_session_regularization=(
-                args.recurrent_v_session_regularization
+            max_recurrent_v_session_fraction=(
+                args.max_recurrent_v_session_fraction
             ),
             use_input_u_session=not args.drop_input_u_session,
-            input_u_session_regularization=args.input_u_session_regularization,
+            max_input_u_session_fraction=args.max_input_u_session_fraction,
         )
 
     if args.load_only:
