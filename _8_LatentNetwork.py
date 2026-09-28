@@ -45,13 +45,31 @@ def latent_network_checkpoint_path(
     n_input_components=DEFAULT_N_INPUT_COMPONENTS,
     readout_rank=DEFAULT_READOUT_RANK,
     save_path=SAVE_LATENT_PATH,
+    use_recurrent_v_session=DEFAULT_USE_RECURRENT_V_SESSION,
+    recurrent_v_session_regularization=DEFAULT_RECURRENT_V_SESSION_REGULARIZATION,
+    use_input_u_session=DEFAULT_USE_INPUT_U_SESSION,
+    input_u_session_regularization=DEFAULT_INPUT_U_SESSION_REGULARIZATION,
 ):
     """Return the standard checkpoint path for a latent-network config."""
-    filename = (
+    filename_stem = (
         f'latent_hybrid_Rec{recurrent_rank}'
         f'_In{n_input_components}'
-        f'_Out{readout_rank}.pt'
+        f'_Out{readout_rank}'
     )
+
+    if use_recurrent_v_session and use_input_u_session:
+        save_path = os.path.join(save_path, 'hybrid')
+        filename = (
+            f'{filename_stem}'
+            f'_RegRec{recurrent_v_session_regularization:g}'
+            f'_RegIn{input_u_session_regularization:g}.pt'
+        )
+    elif not use_recurrent_v_session and not use_input_u_session:
+        save_path = os.path.join(save_path, 'shared')
+        filename = f'{filename_stem}.pt'
+    else:
+        filename = f'{filename_stem}.pt'
+
     return os.path.join(save_path, filename)
 
 
@@ -773,13 +791,23 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
         - low-rank readout factors for every dataset/session
         - loss history and small model metadata
     """
-    os.makedirs(save_path, exist_ok=True)
     checkpoint_path = latent_network_checkpoint_path(
         recurrent_rank=results['rnn'].recurrent_rank,
         n_input_components=results['rnn'].n_input_components,
         readout_rank=results['readouts_by_dataset'][0].readout_rank,
         save_path=save_path,
+        use_recurrent_v_session=results['rnn'].use_recurrent_v_session,
+        recurrent_v_session_regularization=results.get(
+            'recurrent_v_session_regularization',
+            DEFAULT_RECURRENT_V_SESSION_REGULARIZATION
+        ),
+        use_input_u_session=results['rnn'].use_input_u_session,
+        input_u_session_regularization=results.get(
+            'input_u_session_regularization',
+            DEFAULT_INPUT_U_SESSION_REGULARIZATION
+        ),
     )
+    os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
 
     checkpoint = {
         'rnn_state_dict': results['rnn'].state_dict(),
@@ -1121,6 +1149,12 @@ if __name__ == '__main__':
             n_input_components=args.n_input_components,
             readout_rank=args.readout_rank,
             save_path=SAVE_LATENT_PATH,
+            use_recurrent_v_session=not args.drop_recurrent_v_session,
+            recurrent_v_session_regularization=(
+                args.recurrent_v_session_regularization
+            ),
+            use_input_u_session=not args.drop_input_u_session,
+            input_u_session_regularization=args.input_u_session_regularization,
         )
 
     if args.load_only:
