@@ -197,9 +197,7 @@ class LatentRNN(nn.Module):
         )
         if self.use_recurrent_v_session:
             self.V_session = nn.Parameter(
-                0.01
-                * factor_scale
-                * torch.randn(n_sessions, n_units, recurrent_rank)
+                torch.zeros(n_sessions, n_units, recurrent_rank)
             )
         self.register_buffer('h0', torch.zeros(n_conditions, n_units))
 
@@ -214,14 +212,7 @@ class LatentRNN(nn.Module):
         )
         if self.use_input_u_session:
             self.u_session = nn.Parameter(
-                0.01
-                * input_factor_scale
-                * torch.randn(
-                    n_sessions,
-                    n_conditions,
-                    n_input_components,
-                    n_time
-                )
+                torch.zeros(n_sessions, n_conditions, n_input_components, n_time)
             )
 
         # The external input is trainable only in the first and last thirds.
@@ -243,8 +234,8 @@ class LatentRNN(nn.Module):
         if not self.use_recurrent_v_session:
             return torch.zeros_like(self.V_shared)
 
-        raw_delta = self.V_session[int(fx)]
-        raw_norm = raw_delta.norm()
+        raw_V_session = self.V_session[int(fx)]
+        raw_norm = raw_V_session.norm()
         max_norm = (
             self.max_recurrent_v_session_fraction
             * self.V_shared.norm().detach()
@@ -252,7 +243,7 @@ class LatentRNN(nn.Module):
         max_norm = max_norm.clamp_min(1e-8)
         scale = torch.clamp(max_norm / raw_norm.clamp_min(1e-8), max=1.0)
 
-        return raw_delta * scale
+        return raw_V_session * scale
 
     def recurrent_v(self, fx=None):
         """Return the shared V plus the optional session-specific perturbation."""
@@ -320,8 +311,8 @@ class LatentRNN(nn.Module):
         if not self.use_input_u_session:
             return torch.zeros_like(self.u_shared[icond])
 
-        raw_delta = self.u_session[int(fx), icond]
-        raw_norm = raw_delta.norm()
+        raw_u_session = self.u_session[int(fx), icond]
+        raw_norm = raw_u_session.norm()
         max_norm = (
             self.max_input_u_session_fraction
             * self.u_shared.norm().detach()
@@ -329,7 +320,7 @@ class LatentRNN(nn.Module):
         max_norm = max_norm.clamp_min(1e-8)
         scale = torch.clamp(max_norm / raw_norm.clamp_min(1e-8), max=1.0)
 
-        return raw_delta * scale
+        return raw_u_session * scale
 
     def condition_input(self, fx, icond):
         """
@@ -646,6 +637,20 @@ def check_activity_matches_cells(cells_fx, activity_fx):
 # ==============================================================
 
 
+def neuron_r2_values(prediction, target, eps=1e-12):
+    """
+    Return per-neuron R2 values.
+
+    prediction and target both have shape:
+        (n_neurons, n_time)
+    """
+    ss_res = (target - prediction).pow(2).sum(dim=1)
+    ss_tot = (target - target.mean(dim=1, keepdim=True)).pow(2).sum(dim=1)
+
+    valid = ss_tot > eps
+    return 1.0 - ss_res[valid] / ss_tot[valid]
+
+
 def train_latent_network(
     n_steps=200,
     learning_rate=1e-3,
@@ -707,12 +712,14 @@ def train_latent_network(
     )
 
     loss_history = []
+    r2_history = []
 
     for step in range(n_steps):
         optimizer.zero_grad()
 
         loss = torch.tensor(0.0, device=device)
         n_terms = 0
+        r2_values = []
 
         for idata, dataset in enumerate(datasets):
             cells = dataset['cells']
@@ -742,6 +749,9 @@ def train_latent_network(
                     loss = loss + F.mse_loss(prediction, target)
                     n_terms += 1
 
+                    with torch.no_grad():
+                        r2_values.append(neuron_r2_values(prediction, target))
+
         loss = loss / n_terms
         if use_recurrent_v_session and recurrent_v_session_regularization > 0:
             loss = (
@@ -761,14 +771,20 @@ def train_latent_network(
         rnn.project_input_u_session_()
 
         loss_history.append(float(loss.detach().cpu()))
+        r2_history.append(float(torch.cat(r2_values).mean().cpu()))
 
         if step % 50 == 0:
-            print(f'step {step:04d} | loss {loss_history[-1]:.6f}')
+            print(
+                f'step {step:04d} | '
+                f'loss {loss_history[-1]:.6f} | '
+                f'R2 {r2_history[-1]:.6f}'
+            )
 
     results = {
         'rnn': rnn,
         'readouts_by_dataset': readouts_by_dataset,
         'loss_history': loss_history,
+        'r2_history': r2_history,
         'datasets': datasets,
         'recurrent_v_session_regularization': recurrent_v_session_regularization,
         'input_u_session_regularization': input_u_session_regularization,
@@ -789,7 +805,7 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
     This includes:
         - RNN parameters: low-rank W factors and factorized external inputs
         - low-rank readout factors for every dataset/session
-        - loss history and small model metadata
+        - loss/R2 histories and small model metadata
     """
     checkpoint_path = latent_network_checkpoint_path(
         recurrent_rank=results['rnn'].recurrent_rank,
@@ -811,6 +827,7 @@ def save_latent_network(results, save_path=SAVE_LATENT_PATH):
         'rnn_state_dict': results['rnn'].state_dict(),
         'readouts_state_dict': results['readouts_by_dataset'].state_dict(),
         'loss_history': results['loss_history'],
+        'r2_history': results.get('r2_history', []),
         'dataset_ids': [dataset['id'] for dataset in results['datasets']],
         'config': {
             'n_rnn_units': N_RNN_UNITS,
@@ -903,6 +920,7 @@ def load_latent_network(
         'rnn': rnn,
         'readouts_by_dataset': readouts_by_dataset,
         'loss_history': checkpoint['loss_history'],
+        'r2_history': checkpoint.get('r2_history', []),
         'datasets': datasets,
         'checkpoint_path': checkpoint_path,
     }
