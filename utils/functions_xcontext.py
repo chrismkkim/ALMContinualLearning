@@ -9,7 +9,7 @@ import os
 import copy
 from scipy.optimize import curve_fit
 
-def create_dict_topcells_1x2(nfile, dict_topcells, tix_late_delay):
+def create_dict_topcells_1x2(nfile, dict_topcells, tix):
     
     dict_topcells_2 = {
         'P2+A2-': np.array([]),
@@ -24,10 +24,10 @@ def create_dict_topcells_1x2(nfile, dict_topcells, tix_late_delay):
     dict_topcells_1x2 = {fx:copy.deepcopy(dict_topcells_1x2_fx) for fx in range(nfile)}
 
     for fx in range(nfile):                
-        topcells_P1 = np.unique(np.concatenate([dict_topcells['P1']['topcells_at_t'][fx][i] for i in tix_late_delay]))
-        topcells_A1 = np.unique(np.concatenate([dict_topcells['A1']['topcells_at_t'][fx][i] for i in tix_late_delay]))
-        topcells_P2 = np.unique(np.concatenate([dict_topcells['P2']['topcells_at_t'][fx][i] for i in tix_late_delay]))
-        topcells_A2 = np.unique(np.concatenate([dict_topcells['A2']['topcells_at_t'][fx][i] for i in tix_late_delay]))
+        topcells_P1 = np.unique(np.concatenate([dict_topcells['P1']['topcells_at_t'][fx][i] for i in tix]))
+        topcells_A1 = np.unique(np.concatenate([dict_topcells['A1']['topcells_at_t'][fx][i] for i in tix]))
+        topcells_P2 = np.unique(np.concatenate([dict_topcells['P2']['topcells_at_t'][fx][i] for i in tix]))
+        topcells_A2 = np.unique(np.concatenate([dict_topcells['A2']['topcells_at_t'][fx][i] for i in tix]))
         P1_A1 = topcells_P1[~np.isin(topcells_P1,topcells_A1)]
         P1A1  = topcells_P1[ np.isin(topcells_P1,topcells_A1)]
         A1_P1 = topcells_A1[~np.isin(topcells_A1,topcells_P1)]

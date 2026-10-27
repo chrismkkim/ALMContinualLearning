@@ -60,7 +60,6 @@ for idata in range(ndata):
     dict_topcells_1x2_D2 = functions_xcontext.create_dict_topcells_1x2_SDR(par.nfile, dict_topcells_D2)
     dict_topcells_1x2_R  = functions_xcontext.create_dict_topcells_1x2_SDR(par.nfile, dict_topcells_R)
 
-
     dict_topcells_S_4groups = functions_training.create_dict_topcells_4groups(par, dict_topcells_1x2_S)
     dict_topcells_D_4groups = functions_training.create_dict_topcells_4groups(par, dict_topcells_1x2_D2)
     dict_topcells_R_4groups = functions_training.create_dict_topcells_4groups(par, dict_topcells_1x2_R)
