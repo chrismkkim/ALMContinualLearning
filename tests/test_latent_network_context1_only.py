@@ -1,4 +1,4 @@
-"""Removed reversal entry points fail without starting training or loading data."""
+"""Reject obsolete reversal options and unsupported old checkpoint formats."""
 
 from pathlib import Path
 import runpy
@@ -12,8 +12,6 @@ import _8_LatentNetwork as ln
 
 
 @pytest.mark.parametrize('arguments', [
-    ['--retrain_readout'],
-    ['--source_checkpoint', 'unused.pt'],
     ['--learning_rate_recurrent', '1e-3'],
     ['--learning_rate_readout', '1e-4'],
     ['--delay_window', '12', '16'],
@@ -21,7 +19,7 @@ import _8_LatentNetwork as ln
     ['--stop_on_readout_tolerance'],
     ['--max_steps', '100'],
 ])
-def test_reversal_cli_is_rejected(arguments, monkeypatch, capsys):
+def test_obsolete_reversal_cli_is_rejected(arguments, monkeypatch, capsys):
     monkeypatch.setattr(sys, 'argv', [ln.__file__, *arguments])
     with pytest.raises(SystemExit) as error:
         runpy.run_path(ln.__file__, run_name='__main__')
