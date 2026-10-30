@@ -36,6 +36,28 @@ RUN_CONFIGURATIONS = [
 ]
 
 
+
+# RUN_CONFIGURATIONS = [
+#     [
+#         '--retrain_readout',
+#         '--source_checkpoint', 'data/training/recurrent/lowrank/latent_network_Dataset0_In1_Rank10_lowrank.pt',
+#         '--n_steps', '600',
+#         '--learning_rate_alpha', '1e-4',
+#         '--learning_rate_u', '1e-3',
+#         '--train_left_vectors', 
+#         '--learning_rate_left_vectors', '1e-15',
+#         '--learning_rate_singular_values', '1e-1',
+#         '--learning_rate_right_vectors', '1e-1',
+#         '--train_initial_state_layer',
+#         '--train_sensory_input',
+#         '--learning_rate_initial_state_layer', '1e-4',
+#         '--learning_rate_sensory_input', '1e-3',
+#         '--lambda_readout', '1',
+#         '--lambda_coding', '1',
+#     ],
+# ]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dry_run', action='store_true', help='Print commands without running them.')
