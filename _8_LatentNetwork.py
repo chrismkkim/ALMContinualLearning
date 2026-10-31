@@ -358,9 +358,10 @@ class SessionRNN(nn.Module):
     def recurrent_drive(self, rates, train_recurrent):
         """Compute rates @ W.T, detaching recurrent parameters when requested."""
         if hasattr(self, 'svd_left'):
+            left = self.svd_left if train_recurrent else self.svd_left.detach()
             s = self.svd_values if train_recurrent else self.svd_values.detach()
             V = self.svd_right if train_recurrent else self.svd_right.detach()
-            return ((rates @ V) * s) @ self.svd_left.T
+            return ((rates @ V) * s) @ left.T
         if self.recurrent_type == 'fullconn':
             W = self.W if train_recurrent else self.W.detach()
             return rates @ W.T
@@ -374,11 +375,12 @@ class SessionRNN(nn.Module):
         self, reference, initial_activity=None,
         min_cd2_norm_ratio=DEFAULT_MIN_CD2_NORM_RATIO, *, svd_factors=None,
         train_initial_state_layer=False, train_sensory_input=False,
+        train_svd_left=False,
     ):
         """Freeze the source model and attach unconstrained SVD/readout factors.
 
-        Only the initial left SVD factor stays fixed. The signed coefficients
-        and unconstrained right factor need not remain an SVD after updates.
+        The initial left SVD factor stays fixed unless train_svd_left is enabled.
+        Trainable factors are unconstrained and need not remain an SVD after updates.
         svd_factors restores saved factors without recomputing a decomposition.
         """
         _validate_readout_session(self)
@@ -411,7 +413,10 @@ class SessionRNN(nn.Module):
         left, values, right = (
             value.detach().to(device=device, dtype=dtype).clone() for value in svd_factors
         )
-        self.register_buffer('svd_left', left)
+        if train_svd_left:
+            self.svd_left = nn.Parameter(left)
+        else:
+            self.register_buffer('svd_left', left)
         self.svd_values = nn.Parameter(values)
         self.svd_right = nn.Parameter(right)
         for name in CONTEXT1_REFERENCE_KEYS:
@@ -764,14 +769,15 @@ def retrain_latent_network_readout(
     save_path=None, checkpoint_path=None, device=DEFAULT_DEVICE,
     *, train_initial_state_layer=False, train_sensory_input=False,
     learning_rate_initial_state_layer=1e-3, learning_rate_sensory_input=1e-3,
+    train_svd_left=False, learning_rate_left_vectors=1e-3,
 ):
     """Reverse fixed context 1 readouts with fresh input noise on every rollout.
 
     References use activity[12:16] from one source simulation per session.
     Optimize alpha, u, the signed SVD coefficients, and the unconstrained right
-    factor. Optionally retrain the existing initial-state layer (weight/bias)
-    and sensory input vectors. Response input stays fixed. Recurrence receives
-    gradients only through middle-third updates.
+    factor. Optionally retrain the unconstrained left factor, existing
+    initial-state layer (weight/bias), and sensory input vectors. Response input
+    stays fixed. Recurrence receives gradients only through middle-third updates.
     None for input_noise_std inherits the source noise level, which must be
     positive. Each session/condition/component/time bin gets independent
     1 + Gaussian amplitude noise on every forward pass, including evaluation.
@@ -790,6 +796,8 @@ def retrain_latent_network_readout(
         )
     if train_sensory_input:
         rates['input_vectors'] = _validate_scalar(learning_rate_sensory_input, 'learning_rate_sensory_input')
+    if train_svd_left:
+        rates['svd_left'] = _validate_scalar(learning_rate_left_vectors, 'learning_rate_left_vectors')
     lambda_readout = _validate_scalar(lambda_readout, 'lambda_readout', allow_zero=True)
     lambda_coding = _validate_scalar(lambda_coding, 'lambda_coding', allow_zero=True)
     min_cd2_norm_ratio = _validate_scalar(min_cd2_norm_ratio, 'min_cd2_norm_ratio')
@@ -819,6 +827,7 @@ def retrain_latent_network_readout(
             reference, initial_activity, min_cd2_norm_ratio,
             train_initial_state_layer=train_initial_state_layer,
             train_sensory_input=train_sensory_input,
+            train_svd_left=train_svd_left,
         )
 
     parameter_groups = []
@@ -890,13 +899,14 @@ def retrain_latent_network_readout(
         'readout_history_by_session': readout_history_by_session,
         'training_path': str(training_path),
         'readout_retraining': {
-            'method': 'fixed_left_unconstrained_svd',
+            'method': 'unconstrained_svd' if train_svd_left else 'fixed_left_unconstrained_svd',
             'source_checkpoint': str(Path(source_checkpoint).resolve()),
             'readout_window': list(READOUT_WINDOW),
             'min_cd2_norm_ratio': min_cd2_norm_ratio,
             'learning_rates': rates,
             'train_initial_state_layer': train_initial_state_layer,
             'train_sensory_input': train_sensory_input,
+            'train_svd_left': train_svd_left,
             'lambda_readout': lambda_readout, 'lambda_coding': lambda_coding,
             'input_noise_policy': 'fresh_per_session_condition_component_time_bin_and_forward',
             'recurrent_gradient_window': 'middle_third',
@@ -1006,6 +1016,7 @@ def load_latent_network(
                 svd_factors=tuple(state[prefix + name] for name in ('svd_left', 'svd_values', 'svd_right')),
                 train_initial_state_layer=readout_metadata.get('train_initial_state_layer', False),
                 train_sensory_input=readout_metadata.get('train_sensory_input', False),
+                train_svd_left=readout_metadata.get('train_svd_left', False),
             )
     rnn.load_state_dict(checkpoint['rnn_state_dict'])
     results = {
@@ -1138,6 +1149,10 @@ if __name__ == '__main__':
                         help='Retraining rate for unconstrained signed SVD coefficients.')
     parser.add_argument('--learning_rate_right_vectors', type=float,
                         help='Retraining rate for the unconstrained right SVD factor.')
+    parser.add_argument('--train_svd_left', action='store_true',
+                        help='Retrain the unconstrained left SVD factor.')
+    parser.add_argument('--learning_rate_left_vectors', type=float,
+                        help='Retraining rate for the left SVD factor.')
     parser.add_argument('--train_initial_state_layer', action='store_true',
                         help='Retrain the existing initial-state layer weights and bias.')
     parser.add_argument('--train_sensory_input', action='store_true',
@@ -1188,10 +1203,15 @@ if __name__ == '__main__':
         args.learning_rate_alpha, args.learning_rate_u,
         args.learning_rate_singular_values, args.learning_rate_right_vectors,
         args.learning_rate_initial_state_layer, args.learning_rate_sensory_input,
+        args.learning_rate_left_vectors,
     )):
         parser.error('Readout retraining learning-rate options require --retrain_readout.')
     if (args.train_initial_state_layer or args.train_sensory_input) and not args.retrain_readout:
         parser.error('--train_initial_state_layer and --train_sensory_input require --retrain_readout.')
+    if args.train_svd_left and not args.retrain_readout:
+        parser.error('--train_svd_left requires --retrain_readout.')
+    if args.learning_rate_left_vectors is not None and not args.train_svd_left:
+        parser.error('--learning_rate_left_vectors requires --train_svd_left.')
     if args.learning_rate_initial_state_layer is not None and not args.train_initial_state_layer:
         parser.error('--learning_rate_initial_state_layer requires --train_initial_state_layer.')
     if args.learning_rate_sensory_input is not None and not args.train_sensory_input:
@@ -1224,6 +1244,10 @@ if __name__ == '__main__':
             ),
             learning_rate_right_vectors=(
                 args.learning_rate if args.learning_rate_right_vectors is None else args.learning_rate_right_vectors
+            ),
+            train_svd_left=args.train_svd_left,
+            learning_rate_left_vectors=(
+                args.learning_rate if args.learning_rate_left_vectors is None else args.learning_rate_left_vectors
             ),
             train_initial_state_layer=args.train_initial_state_layer,
             train_sensory_input=args.train_sensory_input,

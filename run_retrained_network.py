@@ -17,13 +17,35 @@ import subprocess
 import sys
 
 
+# RUN_CONFIGURATIONS = [
+#     [
+#         '--retrain_readout',
+#         '--source_checkpoint', 'data/training/recurrent/lowrank/latent_network_Dataset0_In1_Rank10_lowrank.pt',
+#         '--n_steps', '600',
+#         '--learning_rate_alpha', '1e-4',
+#         '--learning_rate_u', '1e-3',
+#         '--learning_rate_singular_values', '1e-1',
+#         '--learning_rate_right_vectors', '1e-1',
+#         '--train_initial_state_layer',
+#         '--train_sensory_input',
+#         '--learning_rate_initial_state_layer', '1e-4',
+#         '--learning_rate_sensory_input', '1e-3',
+#         '--lambda_readout', '1',
+#         '--lambda_coding', '1',
+#     ],
+# ]
+
+
+
 RUN_CONFIGURATIONS = [
     [
         '--retrain_readout',
         '--source_checkpoint', 'data/training/recurrent/lowrank/latent_network_Dataset0_In1_Rank10_lowrank.pt',
-        '--n_steps', '600',
+        '--n_steps', '300',
         '--learning_rate_alpha', '1e-4',
         '--learning_rate_u', '1e-3',
+        '--train_svd_left', 
+        '--learning_rate_left_vectors', ' 5e-3',
         '--learning_rate_singular_values', '1e-1',
         '--learning_rate_right_vectors', '1e-1',
         '--train_initial_state_layer',
@@ -34,6 +56,7 @@ RUN_CONFIGURATIONS = [
         '--lambda_coding', '1',
     ],
 ]
+
 
 
 def main():

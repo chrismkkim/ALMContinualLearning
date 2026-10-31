@@ -1,4 +1,4 @@
-"""Centered readout reversal with fixed left factors and fresh input noise."""
+"""Centered readout reversal with optional left-factor training and fresh noise."""
 
 from pathlib import Path
 import runpy
@@ -95,6 +95,28 @@ def test_svd_initialization_reconstructs_source_and_freezes_only_left(source_mod
         assert grads[0] is None and grads[1] is None and grads[2] is not None
 
 
+def test_trainable_left_respects_recurrent_gradient_window(source_model):
+    _, _, results = source_model
+    for fx in results['rnn'].session_ids:
+        session = results['rnn'].session_model(fx)
+        initial = session.initial_activity_from_targets(results['dataset']['activity'][fx])
+        reference = ln.compute_context1_reference(session, initial)
+        original_weight = session.recurrent_weight().detach().clone()
+        session.initialize_readout_retraining(reference, initial, train_svd_left=True)
+        assert isinstance(session.svd_left, torch.nn.Parameter)
+        torch.testing.assert_close(session.recurrent_weight(), original_weight, rtol=1e-5, atol=1e-7)
+        factors = (session.svd_left, session.svd_values, session.svd_right)
+        rates = torch.rand(2, session.n_units, requires_grad=True)
+        drive = session.recurrent_drive(rates, train_recurrent=True)
+        torch.testing.assert_close(drive, rates @ session.recurrent_weight().T)
+        grads = torch.autograd.grad(drive.sum(), factors)
+        assert all(torch.isfinite(grad).all() and torch.count_nonzero(grad) for grad in grads)
+        detached = session.recurrent_drive(rates, train_recurrent=False)
+        grads = torch.autograd.grad(detached.sum(), (*factors, rates), allow_unused=True)
+        assert all(grad is None for grad in grads[:3])
+        assert grads[3] is not None and torch.count_nonzero(grads[3])
+
+
 def test_context2_projection_and_normalization_gradients():
     session = initialize_session()
     with torch.no_grad():
@@ -160,7 +182,8 @@ def test_reversed_readout_satisfies_both_constraints():
     torch.testing.assert_close(losses['loss'], session.alpha.new_tensor(0.), atol=1e-25, rtol=0)
 
 
-def test_retraining_updates_selected_parameters_and_restores_checkpoint(source_model, monkeypatch):
+@pytest.mark.parametrize('train_svd_left', [False, True])
+def test_retraining_updates_selected_parameters_and_restores_checkpoint(source_model, monkeypatch, train_svd_left):
     root, source, original = source_model
     before_bytes = source.read_bytes()
     calls = []
@@ -173,7 +196,7 @@ def test_retraining_updates_selected_parameters_and_restores_checkpoint(source_m
         initialize(session, *args, **kwargs)
         initial_states[session.n_units] = {
             'source_weight': source_weight,
-            'svd_left': session.svd_left.clone(),
+            'svd_left': session.svd_left.detach().clone(),
             'svd_values': session.svd_values.detach().clone(),
             'svd_right': session.svd_right.detach().clone(),
             'references': {name: getattr(session, 'reference_' + name).clone()
@@ -193,6 +216,7 @@ def test_retraining_updates_selected_parameters_and_restores_checkpoint(source_m
         learning_rate_alpha=0.01, learning_rate_u=0.02,
         learning_rate_singular_values=0.003, learning_rate_right_vectors=0.004,
         lambda_readout=2, lambda_coding=3,
+        train_svd_left=train_svd_left, learning_rate_left_vectors=0.005,
     )
     assert source.read_bytes() == before_bytes
     assert result['rnn'].input_noise_std == 0.3  # Inherit the source noise level.
@@ -217,7 +241,12 @@ def test_retraining_updates_selected_parameters_and_restores_checkpoint(source_m
         W0 = source_session.recurrent_weight().detach()
         initial = initial_states[session.n_units]
         torch.testing.assert_close(initial['source_weight'], W0, rtol=0, atol=0)
-        torch.testing.assert_close(session.svd_left, initial['svd_left'], rtol=0, atol=0)
+        if train_svd_left:
+            assert not torch.equal(session.svd_left, initial['svd_left'])
+            assert session.svd_left.grad is not None and torch.isfinite(session.svd_left.grad).all()
+        else:
+            torch.testing.assert_close(session.svd_left, initial['svd_left'], rtol=0, atol=0)
+            assert session.svd_left.grad is None
         for name, value in initial['references'].items():
             torch.testing.assert_close(getattr(session, 'reference_' + name), value, rtol=0, atol=0)
         assert not torch.allclose(session.svd_values, initial['svd_values'])
@@ -225,14 +254,24 @@ def test_retraining_updates_selected_parameters_and_restores_checkpoint(source_m
         assert not torch.allclose(session.recurrent_weight(), W0)
         assert session.alpha.item() != 1
         assert torch.count_nonzero(session.u) > 0
-        assert session.svd_left.grad is None
         assert len(result['readout_history_by_session'][fx]) == 3
     saved = torch.load(result['checkpoint_path'], weights_only=True)
     assert saved['version'] == 6
     assert saved['readout_retraining']['readout_window'] == [12, 16]
-    assert saved['readout_retraining']['learning_rates'] == {
+    assert saved['readout_retraining']['train_svd_left'] == train_svd_left
+    assert saved['readout_retraining']['method'] == (
+        'unconstrained_svd' if train_svd_left else 'fixed_left_unconstrained_svd'
+    )
+    expected_rates = {
         'alpha': 0.01, 'u': 0.02, 'svd_values': 0.003, 'svd_right': 0.004,
     }
+    if train_svd_left:
+        expected_rates['svd_left'] = 0.005
+    assert saved['readout_retraining']['learning_rates'] == expected_rates
+    if not train_svd_left:
+        # Older readout checkpoints have no left-factor training flag.
+        saved['readout_retraining'].pop('train_svd_left')
+        torch.save(saved, result['checkpoint_path'])
     calls.clear()
     restored = ln.load_latent_network(result['checkpoint_path'], training_path=root)
     assert not calls  # Loading must neither regenerate references nor draw noise.
@@ -241,9 +280,11 @@ def test_retraining_updates_selected_parameters_and_restores_checkpoint(source_m
         torch.testing.assert_close(restored['rnn'].state_dict()[name], value, rtol=0, atol=0)
     for fx in result['rnn'].session_ids:
         actual_session = restored['rnn'].session_model(fx)
-        assert {name for name, p in actual_session.named_parameters() if p.requires_grad} == {
-            'alpha', 'u', 'svd_values', 'svd_right',
-        }
+        expected_trainable = {'alpha', 'u', 'svd_values', 'svd_right'}
+        if train_svd_left:
+            expected_trainable.add('svd_left')
+        assert {name for name, p in actual_session.named_parameters() if p.requires_grad} == expected_trainable
+        assert ('svd_left' in dict(actual_session.named_buffers())) == (not train_svd_left)
         torch.manual_seed(13)
         expected = result['rnn'].readout(fx)
         torch.manual_seed(13)
@@ -387,6 +428,7 @@ def test_cli_retrains_existing_checkpoint(source_model, monkeypatch, capsys):
         '--n_steps', '2', '--learning_rate', '0.005',
         '--learning_rate_alpha', '0.01', '--learning_rate_u', '0.02',
         '--learning_rate_singular_values', '0.003', '--learning_rate_right_vectors', '0.004',
+        '--train_svd_left', '--learning_rate_left_vectors', '0.006',
         '--train_initial_state_layer', '--train_sensory_input',
         '--learning_rate_initial_state_layer', '0.0001', '--learning_rate_sensory_input', '0.002',
         '--lambda_readout', '2', '--lambda_coding', '3',
@@ -402,6 +444,8 @@ def test_cli_retrains_existing_checkpoint(source_model, monkeypatch, capsys):
     assert result['readout_retraining']['lambda_coding'] == 3
     assert result['readout_retraining']['train_initial_state_layer'] is True
     assert result['readout_retraining']['train_sensory_input'] is True
+    assert result['readout_retraining']['train_svd_left'] is True
+    assert result['readout_retraining']['learning_rates']['svd_left'] == 0.006
     assert result['readout_retraining']['learning_rates']['initial_state_layer'] == 0.0001
     assert result['readout_retraining']['learning_rates']['input_vectors'] == 0.002
     assert 'cd2 clamps' in capsys.readouterr().out
@@ -422,22 +466,28 @@ def test_retraining_entry_point_and_cli_help(monkeypatch, capsys):
         '--learning_rate_right_vectors', '--lambda_readout', '--lambda_coding',
         '--min_cd2_norm_ratio', '--train_initial_state_layer', '--train_sensory_input',
         '--learning_rate_initial_state_layer', '--learning_rate_sensory_input',
+        '--train_svd_left', '--learning_rate_left_vectors',
     ):
         assert flag in help_text
 
 
-def test_cli_shared_learning_rate_and_inherited_noise(source_model, monkeypatch):
+@pytest.mark.parametrize('train_svd_left', [False, True])
+def test_cli_shared_learning_rate_and_inherited_noise(source_model, monkeypatch, train_svd_left):
     root, source, _ = source_model
     monkeypatch.setattr(sys, 'argv', [
         ln.__file__, '--retrain_readout', '--source_checkpoint', str(source),
         '--training_path', str(root), '--n_steps', '1',
         '--learning_rate', '0.007', '--learning_rate_u', '0.009',
+        *(['--train_svd_left'] if train_svd_left else []),
     ])
     result = runpy.run_path(ln.__file__, run_name='__main__')['retrained_results']
     assert result['rnn'].input_noise_std == 0.3
-    assert result['readout_retraining']['learning_rates'] == {
+    expected_rates = {
         'alpha': 0.007, 'u': 0.009, 'svd_values': 0.007, 'svd_right': 0.007,
     }
+    if train_svd_left:
+        expected_rates['svd_left'] = 0.007
+    assert result['readout_retraining']['learning_rates'] == expected_rates
 
 
 @pytest.mark.parametrize('arguments, message', [
@@ -446,6 +496,10 @@ def test_cli_shared_learning_rate_and_inherited_noise(source_model, monkeypatch)
     (['--learning_rate_u', '0.01'], 'require --retrain_readout'),
     (['--train_initial_state_layer'], 'require --retrain_readout'),
     (['--train_sensory_input'], 'require --retrain_readout'),
+    (['--train_svd_left'], 'requires --retrain_readout'),
+    (['--learning_rate_left_vectors', '0.01'], 'require --retrain_readout'),
+    (['--retrain_readout', '--source_checkpoint', 'unused.pt',
+      '--learning_rate_left_vectors', '0.001'], 'requires --train_svd_left'),
     (['--retrain_readout', '--source_checkpoint', 'unused.pt',
       '--learning_rate_initial_state_layer', '0.001'], 'requires --train_initial_state_layer'),
     (['--retrain_readout', '--source_checkpoint', 'unused.pt',
@@ -466,6 +520,10 @@ def test_cli_requires_retraining_mode_and_source(arguments, message, monkeypatch
     {'lambda_coding': -1}, {'min_cd2_norm_ratio': 0},
     {'train_initial_state_layer': True, 'learning_rate_initial_state_layer': 0},
     {'train_sensory_input': True, 'learning_rate_sensory_input': float('nan')},
+    {'train_svd_left': True, 'learning_rate_left_vectors': 0},
+    {'train_svd_left': True, 'learning_rate_left_vectors': -1},
+    {'train_svd_left': True, 'learning_rate_left_vectors': float('nan')},
+    {'train_svd_left': True, 'learning_rate_left_vectors': float('inf')},
 ])
 def test_invalid_retraining_options_fail_before_loading(kwargs):
     with pytest.raises(ValueError):
